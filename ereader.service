@@ -1,0 +1,13 @@
+[Unit]
+Description=E-Reader Application
+After=network.target pisugar-server.service
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/ereader/main.py
+WorkingDirectory=/home/pi/ereader
+Restart=on-failure
+User=pi
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

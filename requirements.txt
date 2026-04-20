@@ -1,0 +1,25 @@
+# E-Reader Dependencies
+# Install on Raspberry Pi with: pip3 install -r requirements.txt
+
+# Display driver comes from Waveshare - install separately
+# cd ~ && git clone https://github.com/waveshare/e-Paper.git
+# cd e-Paper/RaspberryPi_JetsonNano/python && pip3 install -e .
+
+Pillow>=9.0.0
+RPi.GPIO>=0.7.1
+spidev>=3.5
+
+# EPUB support
+ebooklib>=0.5
+beautifulsoup4>=4.11
+
+# PDF support
+pdf2image>=1.16
+pdfminer.six>=20221105
+
+# PiSugar WebSocket support
+websockets>=10.0
+
+# Web UI for upload/settings
+flask>=2.0
+werkzeug>=2.0
