@@ -50,12 +50,16 @@ logger = logging.getLogger(__name__)
 
 
 def get_battery_percentage():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect(("127.0.0.1", 8423))
-        s.sendall(b"get battery")
-        bat = s.recv(1024).decode().strip()
-        bat = bat.split(":")[1]
-        return float(bat)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect(("127.0.0.1", 8423))
+            s.sendall(b"get battery")
+            bat = s.recv(1024).decode().strip()
+            bat = bat.split(":")[1]
+            return float(bat)
+    except Exception as e:
+        logger.error(f"Failed to get battery percentage: {e}")
+        return 0.0
 
 
 def get_page_count():
