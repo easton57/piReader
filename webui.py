@@ -2,12 +2,26 @@
 Flask web application for the e-reader.
 """
 
-import logging, os, time, urllib.request
-from flask import Flask, flash, jsonify, redirect, render_template_string, request, url_for
+import logging
+import os
+import socket
+import time
+import urllib.request
+
+from flask import (
+    Flask,
+    flash,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    url_for,
+)
 from werkzeug.utils import secure_filename
 
 try:
     import RPi.GPIO as GPIO
+
     IS_PI = True
 except ImportError:
     IS_PI = False
@@ -16,7 +30,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-key")
 
 try:
-    from config import LIBRARY_PATH, CACHE_DIR
+    from config import CACHE_DIR, LIBRARY_PATH
 except ImportError:
     LIBRARY_PATH = "library"
     CACHE_DIR = "cache"
@@ -29,24 +43,32 @@ app.config["SCREENSAVER_FOLDER"] = SCREENSAVER_FOLDER
 SUPPORTED_EXTENSIONS = {".txt", ".epub", ".pdf"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp"}
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
+
 def get_battery_percentage():
-    try:
-        with urllib.request.urlopen("http://127.0.0.1:8421/battery", timeout=2) as r:
-            return int(r.read().decode("utf-8"))
-    except:
-        return 100
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect(("127.0.0.1", 8423))
+        s.sendall(b"get battery")
+        bat = s.recv(1024).decode().strip()
+        bat = bat.split(":")[1]
+        return float(bat)
+
 
 def get_page_count():
     return 0
 
+
 def ensure_directory(path):
     os.makedirs(path, exist_ok=True)
 
+
 def is_running_on_pi():
     return IS_PI
+
 
 def get_library_files():
     files = []
@@ -56,8 +78,16 @@ def get_library_files():
             if os.path.isfile(fp):
                 _, ext = os.path.splitext(fn.lower())
                 if ext in SUPPORTED_EXTENSIONS:
-                    files.append({"name": fn, "path": fp, "size": os.path.getsize(fp), "extension": ext})
+                    files.append(
+                        {
+                            "name": fn,
+                            "path": fp,
+                            "size": os.path.getsize(fp),
+                            "extension": ext,
+                        }
+                    )
     return sorted(files, key=lambda x: x["name"].lower())
+
 
 def get_current_screensaver():
     for ext in IMAGE_EXTENSIONS:
@@ -66,12 +96,14 @@ def get_current_screensaver():
             return ip
     return None
 
+
 def format_file_size(sb):
     for u in ["B", "KB", "MB", "GB"]:
         if sb < 1024.0:
             return f"{sb:.0f} {u}"
         sb /= 1024.0
     return f"{sb:.1f} GB"
+
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -140,6 +172,7 @@ h1{font-size:1.5rem;color:#222}
 </html>
 """
 
+
 # Routes
 @app.route("/")
 def index():
@@ -151,7 +184,14 @@ def index():
         book["size_formatted"] = format_file_size(book["size"])
     screensaver = get_current_screensaver()
     screensaver_filename = os.path.basename(screensaver) if screensaver else None
-    return render_template_string(HTML_TEMPLATE, battery=battery, books=books, screensaver=screensaver, screensaver_filename=screensaver_filename, is_pi=IS_PI)
+    return render_template_string(
+        HTML_TEMPLATE,
+        battery=battery,
+        books=books,
+        screensaver=screensaver,
+        screensaver_filename=screensaver_filename,
+        is_pi=IS_PI,
+    )
 
 
 @app.route("/upload", methods=["POST"])
@@ -202,8 +242,10 @@ def screensaver():
     file.save(filepath)
 
     try:
-        from display import EPaperDisplay, WIDTH, HEIGHT
         from PIL import Image
+
+        from display import HEIGHT, WIDTH, EPaperDisplay
+
         display = EPaperDisplay(debug_mode=False)
         if display.initialized:
             img = Image.open(filepath)
@@ -225,6 +267,7 @@ def screensaver():
 @app.route("/screensaver/<path:filename>")
 def screensaver_file(filename):
     from flask import send_from_directory
+
     return send_from_directory(SCREENSAVER_FOLDER, filename)
 
 
@@ -248,7 +291,15 @@ def delete_file(filename):
 
 @app.route("/status")
 def status():
-    return jsonify({"battery": get_battery_percentage(), "page_count": get_page_count(), "is_pi": IS_PI, "library_path": UPLOAD_FOLDER, "cache_dir": SCREENSAVER_FOLDER})
+    return jsonify(
+        {
+            "battery": get_battery_percentage(),
+            "page_count": get_page_count(),
+            "is_pi": IS_PI,
+            "library_path": UPLOAD_FOLDER,
+            "cache_dir": SCREENSAVER_FOLDER,
+        }
+    )
 
 
 if __name__ == "__main__":
