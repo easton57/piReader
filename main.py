@@ -7,7 +7,6 @@ import os
 import time
 from enum import Enum
 
-import button
 from button import ButtonHandler
 from config import (
     CACHE_DIR,
@@ -82,6 +81,27 @@ class Application:
         """Start the application main loop."""
         logger.info("Starting application...")
         self.running = True
+
+        # Register button callbacks
+        @self.handler.on_click(1)
+        def single_click():
+            self._handle_action("down")
+
+        @self.handler.on_click(2)
+        def double_click():
+            self._handle_action("up")
+
+        @self.handler.on_click(3)
+        def triple_click():
+            self._handle_action("select")
+
+        @self.handler.on_click(4)
+        def quad_click():
+            self._handle_action("hold")
+
+        @self.handler.on_click(5)
+        def pent_click():
+            self._handle_action("shutdown")
 
         # Show screensaver on boot
         self._show_screensaver()
