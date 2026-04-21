@@ -2,8 +2,9 @@
 E-paper display wrapper for the Waveshare 2.13" e-Paper HAT v4.
 """
 
-from PIL import Image, ImageDraw, ImageFont
 import logging
+
+from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,9 @@ class EPaperDisplay:
 
     def _init_display(self):
         try:
-            from waveshare_epd import epd2in13_V4
-            self.epd = epd2in13_V4.EPD()
+            import epd2in13
+
+            self.epd = epd2in13.EPD()
             self.epd.init()
             self.epd.Clear(0xFF)
             self._initialized = True
@@ -48,8 +50,8 @@ class EPaperDisplay:
             if not self._initialized:
                 return
 
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
+        if image.mode != "RGB":
+            image = image.convert("RGB")
 
         buffer = self.epd.getbuffer(image)
 
@@ -82,4 +84,4 @@ class EPaperDisplay:
             self.epd.init()
 
     def create_canvas(self):
-        return Image.new('L', (self.WIDTH, self.HEIGHT), 255)
+        return Image.new("L", (self.WIDTH, self.HEIGHT), 255)

@@ -1,9 +1,8 @@
 # E-Reader Dependencies
 # Install on Raspberry Pi with: pip3 install -r requirements.txt
 
-# Display driver comes from Waveshare - install separately
-# cd ~ && git clone https://github.com/waveshare/e-Paper.git
-# cd e-Paper/RaspberryPi_JetsonNano/python && pip3 install -e .
+# Display driver comes from Waveshare
+epd-library
 
 Pillow>=9.0.0
 RPi.GPIO>=0.7.1
