@@ -38,7 +38,7 @@ class EPaperDisplay:
             return
 
         try:
-            rotated = image.rotate(90, expand=True)
+            rotated = image.rotate(270, expand=True)
             buffer = self.epd.getbuffer(rotated)
             black_buf = buffer
             red_buf = bytearray(len(buffer))
