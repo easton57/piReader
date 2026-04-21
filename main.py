@@ -430,22 +430,6 @@ class Application:
             if self.running:
                 self.display.wake()
 
-    @handler.on_click(1)
-    def on_click_1(self):
-        self._handle_action("select")
-
-    @handler.on_click(2)
-    def on_click_2(self):
-        self._handle_action("up")
-
-    @handler.on_click(3)
-    def on_click_3(self):
-        self._handle_action("down")
-
-    @handler.on_click(4)
-    def on_click_4(self):
-        self._handle_action("hold")
-
 
 def main():
     """Main entry point."""
