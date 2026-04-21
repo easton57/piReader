@@ -2,7 +2,7 @@
 Flask web application for the e-reader.
 """
 
-import logging, os, urllib.request
+import logging, os, time, urllib.request
 from flask import Flask, flash, jsonify, redirect, render_template_string, request, url_for
 from werkzeug.utils import secure_filename
 
@@ -200,7 +200,25 @@ def screensaver():
     if os.path.exists(filepath):
         os.remove(filepath)
     file.save(filepath)
-    flash("Screensaver set successfully", "success")
+
+    try:
+        from display import EPaperDisplay, WIDTH, HEIGHT
+        from PIL import Image
+        display = EPaperDisplay(debug_mode=False)
+        if display.initialized:
+            img = Image.open(filepath)
+            img = img.resize((WIDTH, HEIGHT), Image.LANCZOS)
+            display.show(img, partial=False)
+            time.sleep(2)
+            display.clear()
+            display.sleep()
+            flash("Screensaver set and shown on display", "success")
+        else:
+            flash("Screensaver saved (display not available)", "success")
+    except Exception as e:
+        logger.error(f"Display update failed: {e}")
+        flash("Screensaver saved", "success")
+
     return redirect(url_for("index"))
 
 
