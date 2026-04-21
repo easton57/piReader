@@ -28,6 +28,10 @@ class EPaperDisplay:
             logging.error("Failed to initialize display: " + str(e))
             self.initialized = False
 
+    def reinitialize(self):
+        """Re-initialize the display."""
+        self._init_display()
+
     def show(self, image, partial=True):
         self.show_count += 1
         if not self.initialized:

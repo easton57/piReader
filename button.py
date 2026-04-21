@@ -1,15 +1,15 @@
 """Button handler with click pattern detection."""
 
+import asyncio
 import logging
 import os
 import subprocess
 import threading
 import time
 import urllib.request
-import websockets
-import asyncio
-from PIL import Image, ImageDraw, ImageFont
 
+import websockets
+from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +80,13 @@ class ButtonHandler:
         """Try to connect in websocket mode."""
         try:
             import config
-            ws_url = getattr(config, 'WEB_BUTTON_URL', None)
+
+            ws_url = getattr(config, "WEB_BUTTON_URL", None)
             if ws_url:
-                self.ws = True
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self.ws = loop.run_until_complete(websockets.connect(ws_url))
+                self._ws_loop = loop
                 logger.info("Using websocket mode")
                 return True
         except Exception:
@@ -94,13 +98,40 @@ class ButtonHandler:
         """Set up HTTP polling mode."""
         try:
             import config
-            self.poll_url = getattr(config, 'BUTTON_POLL_URL', 'http://127.0.0.1:8421/button')
+
+            self.poll_url = getattr(
+                config, "BUTTON_POLL_URL", "http://127.0.0.1:8421/button"
+            )
         except Exception:
-            self.poll_url = 'http://127.0.0.1:8421/button'
+            self.poll_url = "http://127.0.0.1:8421/button"
 
     def _websocket_poll(self):
         """Poll via WebSocket."""
-        time.sleep(0.1)
+        import config
+        import asyncio
+
+        ws_url = getattr(config, "WEB_BUTTON_URL", None)
+        try:
+            async def recv_message():
+                ws = await websockets.connect(ws_url)
+                try:
+                    return await asyncio.wait_for(ws.recv(), timeout=1.0)
+                finally:
+                    await ws.close()
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                message = loop.run_until_complete(recv_message())
+                if message:
+                    self._on_button_event(message)
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                loop.close()
+        except Exception as e:
+            if self.debug_mode:
+                logger.debug("WebSocket poll error: " + str(e))
 
     def _http_poll(self):
         """Poll via HTTP."""
@@ -114,9 +145,9 @@ class ButtonHandler:
 
     def _on_button_event(self, event_type):
         """Handle button event."""
-        if event_type == 'press':
+        if event_type == "press":
             self._on_press()
-        elif event_type == 'release':
+        elif event_type == "release":
             self._on_release()
 
     def _on_press(self):
@@ -181,12 +212,19 @@ class ButtonHandler:
         # Get font path from config or use fallback
         try:
             from config import FONTS_DIR
+
             font_path = os.path.join(FONTS_DIR, "LiberationMono-Regular.ttf")
         except ImportError:
-            font_path = os.path.join(os.path.expanduser("~"), "ereader", "fonts", "LiberationMono-Regular.ttf")
+            font_path = os.path.join(
+                os.path.expanduser("~"),
+                "ereader",
+                "fonts",
+                "LiberationMono-Regular.ttf",
+            )
 
         try:
             from display import EPaperDisplay
+
             display = EPaperDisplay()
         except Exception:
             display = None
@@ -252,9 +290,12 @@ class GPIButtonHandler:
 
         try:
             import RPi.GPIO as GPIO
+
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(self.BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            GPIO.add_event_detect(self.BUTTON_PIN, GPIO.BOTH, callback=self._gpio_callback, bouncetime=100)
+            GPIO.add_event_detect(
+                self.BUTTON_PIN, GPIO.BOTH, callback=self._gpio_callback, bouncetime=100
+            )
             logger.info("GPIO button handler started")
         except Exception as e:
             logger.error("GPIO setup failed: " + str(e))
@@ -264,6 +305,7 @@ class GPIButtonHandler:
         self.running = False
         try:
             import RPi.GPIO as GPIO
+
             GPIO.remove_event_detect(self.BUTTON_PIN)
         except Exception:
             pass
@@ -273,6 +315,7 @@ class GPIButtonHandler:
         """Handle GPIO callback."""
         try:
             import RPi.GPIO as GPIO
+
             if GPIO.input(channel) == GPIO.LOW:
                 self._on_press()
             else:
@@ -317,7 +360,9 @@ class GPIButtonHandler:
         if self.multi_click_timer:
             self.multi_click_timer.cancel()
 
-        self.multi_click_timer = threading.Timer(self.MULTI_CLICK_WINDOW, self._dispatch)
+        self.multi_click_timer = threading.Timer(
+            self.MULTI_CLICK_WINDOW, self._dispatch
+        )
         self.multi_click_timer.start()
 
     def _dispatch(self):
