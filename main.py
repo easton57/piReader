@@ -420,6 +420,13 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
+    # Start WebUI in background thread
+    import threading
+    from webui import app as flask_app
+    webui_thread = threading.Thread(target=lambda: flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False), daemon=True)
+    webui_thread.start()
+    logger.info("WebUI started on port 5000")
+
     # Create and start application
     app = Application(debug=DEBUG_MODE)
     app.start()
