@@ -72,6 +72,7 @@ class Application:
 
         # Running flag
         self.running = False
+        self._button_pressed = False
 
         # Initialize button handler
         self.button = ButtonHandler(callback=self._handle_action, debug_mode=self.debug)
@@ -81,12 +82,23 @@ class Application:
         logger.info("Starting application...")
         self.running = True
 
+        # Start button handler first to detect wake button
+        self.button.start()
+
+        # Show screensaver on boot
+        self._show_screensaver()
+
+        # Wait for button press to show book list
+        logger.info("Waiting for button press to wake...")
+        while self.running and not self._button_pressed:
+            self._check_for_button_press()
+            time.sleep(0.1)
+        self._button_pressed = False
+        self.display.wake()
+
         # Try to restore saved location
         if self.browser.go_to_saved_location():
             logger.info("Restored saved location")
-
-        # Start button handler
-        self.button.start()
 
         # Initial render
         self._render()
@@ -99,6 +111,19 @@ class Application:
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received")
             self.stop()
+
+    def _check_for_button_press(self):
+        """Check for button press via HTTP poll."""
+        import urllib.request
+
+        try:
+            req = urllib.request.Request(self.button.poll_url)
+            with urllib.request.urlopen(req, timeout=0.5) as response:
+                data = response.read().decode()
+                if data:
+                    self._button_pressed = True
+        except Exception:
+            pass
 
     def stop(self):
         """Stop the application and cleanup."""
@@ -313,6 +338,24 @@ class Application:
 
         # Display (not partial refresh)
         self.display.show(img, partial=False)
+
+    def _show_screensaver(self):
+        """Show screensaver image on boot."""
+        from PIL import Image
+
+        for ext in [".png", ".jpg", ".jpeg", ".bmp", ".gif"]:
+            screensaver_path = os.path.join(CACHE_DIR, "screensaver" + ext)
+            if os.path.exists(screensaver_path):
+                try:
+                    img = Image.open(screensaver_path)
+                    if img.size != (DISPLAY_WIDTH, DISPLAY_HEIGHT):
+                        img = img.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT), Image.LANCZOS)
+                    self.display.show(img, partial=False)
+                    time.sleep(2)
+                    logger.info("Screensaver shown on boot")
+                    return
+                except Exception as e:
+                    logger.error(f"Failed to show screensaver: {e}")
 
     def _render(self):
         """Render the current mode's display."""
