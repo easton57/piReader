@@ -85,22 +85,27 @@ class Application:
         # Register button callbacks
         @self.handler.on_click(1)
         def single_click():
+            logger.info("Single click detected")
             self._handle_action("down")
 
         @self.handler.on_click(2)
         def double_click():
+            logger.info("Double click detected")
             self._handle_action("up")
 
         @self.handler.on_click(3)
         def triple_click():
+            logger.info("Triple click detected")
             self._handle_action("select")
 
         @self.handler.on_click(4)
         def quad_click():
+            logger.info("Quad click detected")
             self._handle_action("hold")
 
         @self.handler.on_click(5)
         def pent_click():
+            logger.info("Pent click detected")
             self._handle_action("shutdown")
 
         # Show screensaver on boot
@@ -364,7 +369,7 @@ class Application:
         elif self.mode == AppMode.PDF_SELECT:
             img = self._render_browser()
         else:
-            img = self.display.create_canvas()
+            img = self._show_screensaver()
 
         if img:
             self.display.show(img)
