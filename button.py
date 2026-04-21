@@ -28,10 +28,10 @@ class ButtonHandler:
 
     def _get_button_event(self):
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(1.0)
                 s.connect(("127.0.0.1", 8423))
-                s.sendall(b"get button_event\n")
+                s.sendall(b"get button_event")
                 response = s.recv(1024).decode().strip()
                 return response.replace("button_event: ", "").strip()
         except socket.timeout:
