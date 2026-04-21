@@ -33,7 +33,12 @@ class ButtonHandler:
                 s.connect(("127.0.0.1", 8423))
                 s.sendall(b"get button_event")
                 response = s.recv(1024).decode().strip()
-                return response.replace("button_event: ", "").strip()
+
+                if "Invalid request." in response:
+                    # remove invalid request suffix
+                    return response.replace("Invalid request.", "").strip()
+
+                return response.strip()
         except socket.timeout:
             return None
         except Exception as e:
