@@ -28,9 +28,10 @@ class ButtonHandler:
 
     def _get_button_event(self):
         try:
+            from config import PISUGAR_HOST, PISUGAR_PORT
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(1.0)
-                s.connect(("127.0.0.1", 8423))
+                s.connect((PISUGAR_HOST, PISUGAR_PORT))
                 s.sendall(b"get button_event")
                 response = s.recv(1024).decode().strip()
 
@@ -70,6 +71,7 @@ class ButtonHandler:
                     self.last_click_time = now
                     logger.debug(f"Click detected, count now: {self.click_count}")
 
+                # Check if we've timed out waiting for more clicks
                 if (
                     self.click_count > 0
                     and (now - self.last_click_time) > self.click_timeout

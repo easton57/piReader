@@ -88,7 +88,8 @@ class TextReader:
     def get_battery_percentage(self):
         try:
             if urllib is not None:
-                response = urllib.request.urlopen("http://127.0.0.1:8421/battery")
+                from config import BATTERY_HOST, BATTERY_PORT
+                response = urllib.request.urlopen(f"http://{BATTERY_HOST}:{BATTERY_PORT}/battery")
                 data = response.read()
                 return int(data)
         except Exception:

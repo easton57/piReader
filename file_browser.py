@@ -183,3 +183,7 @@ class FileBrowser:
     def get_cursor_position(self) -> int:
         """Get the current cursor position."""
         return self.cursor_position
+
+    def refresh(self) -> None:
+        """Public method to refresh the current directory contents."""
+        self._refresh()

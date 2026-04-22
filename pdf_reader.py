@@ -93,7 +93,7 @@ class PDFReader:
         x = (self.WIDTH - page.width) // 2
         y = (self.HEIGHT - page.height) // 2
         canvas.paste(page.convert("L"), (x, y))
-        canvas = canvas.convert("1")
+        # Convert to RGB directly for display compatibility
         return canvas.convert("RGB")
 
     def _load_text_mode(self) -> bool:

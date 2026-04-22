@@ -204,7 +204,7 @@ class Application:
         # Check if it's a directory
         if os.path.isdir(selected_path):
             # Navigate into directory
-            self.browser._refresh()
+            self.browser.refresh()
             self._render()
             return
 
@@ -310,7 +310,7 @@ class Application:
 
         # Stop running
         self.running = False
-        self.handler.stop()  # Stop button handler
+        # Note: Button handler is stopped in the stop() method to avoid double-stop
 
     def _show_shutdown_message(self):
         """Show shutdown message on display."""
@@ -353,7 +353,7 @@ class Application:
                         img = img.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT), Image.LANCZOS)
                     self.display.show(img, partial=False)
                     time.sleep(2)
-                    logger.info("Screensaver shown on boot")
+                    logger.info("Screensaver showing")
                     return
                 except Exception as e:
                     logger.error(f"Failed to show screensaver: {e}")
@@ -411,6 +411,8 @@ class Application:
             name, is_dir = items[i]
 
             # Truncate long filenames
+            # Calculate max characters that fit: (available width) / (approx width per char)
+            # Approx width per char is FONT_SIZE // 2 for monospace font
             max_len = (DISPLAY_WIDTH - MARGIN_LEFT - MARGIN_RIGHT) // (FONT_SIZE // 2)
             if len(name) > max_len:
                 name = name[: max_len - 3] + "..."
