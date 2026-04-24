@@ -354,7 +354,8 @@ class Application:
                     if img.size != (DISPLAY_WIDTH, DISPLAY_HEIGHT):
                         img = img.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT), Image.LANCZOS)
                     self.display.show(img, partial=False)
-                    time.sleep(2)
+                    time.sleep(1.5)  # Wait for e-paper refresh to complete
+                    time.sleep(2)  # Display screensaver for 2 seconds
                     logger.info("Screensaver showing")
                     return
                 except Exception as e:

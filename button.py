@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class ButtonHandler:
-    def __init__(self, click_timeout=0.4):
+    def __init__(self, click_timeout=0.15):
         self.click_timeout = click_timeout
         self.click_count = 0
         self.last_click_time = 0
