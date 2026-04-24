@@ -7,10 +7,10 @@ from display import EPaperDisplay
 
 def test_display_init():
     print("Test: Display Initialization")
-    display = EPaperDisplay()
+    display = EPaperDisplay(debug_mode=True)
     display.clear()
 
-    canvas = display.create_canvas()
+    canvas = display.create_canvas().rotate(270, expand=True)
     draw = ImageDraw.Draw(canvas)
 
     try:
@@ -19,7 +19,7 @@ def test_display_init():
         font = ImageFont.load_default()
 
     draw.text((60, 50), "Display OK", font=font, fill=0)
-    display.show(canvas)
+    display.show(canvas, partial=False)
 
     display.sleep()
     print("  PASSED: Display initialized and shows 'Display OK'")
@@ -27,7 +27,7 @@ def test_display_init():
 
 def test_display_pages():
     print("Test: Display Pages")
-    display = EPaperDisplay()
+    display = EPaperDisplay(debug_mode=True)
     display.clear()
 
     pages = [
@@ -45,11 +45,13 @@ def test_display_pages():
     ]
 
     for i, text in enumerate(pages):
-        canvas = display.create_canvas()
+        canvas = display.create_canvas().rotate(270, expand=True)
         draw = ImageDraw.Draw(canvas)
 
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+            font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12
+            )
         except:
             font = ImageFont.load_default()
 
@@ -57,7 +59,7 @@ def test_display_pages():
         page_num = "Page " + str((i // 4) + 1) + "/3"
         draw.text((180, 110), page_num, font=font, fill=128)
 
-        display.show(canvas)
+        display.show(canvas, partial=False)
         print("  Showing: " + text)
 
         if i < len(pages) - 1:
