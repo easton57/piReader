@@ -344,9 +344,11 @@ class Application:
         """Show screensaver image on boot."""
         from PIL import Image
 
+        logger.debug("Looking for screensaver image...")
         for ext in [".png", ".jpg", ".jpeg", ".bmp", ".gif"]:
             screensaver_path = os.path.join(CACHE_DIR, "screensaver" + ext)
             if os.path.exists(screensaver_path):
+                logger.info(f"Found screensaver: {screensaver_path}")
                 try:
                     img = Image.open(screensaver_path)
                     if img.size != (DISPLAY_WIDTH, DISPLAY_HEIGHT):
@@ -357,6 +359,8 @@ class Application:
                     return
                 except Exception as e:
                     logger.error(f"Failed to show screensaver: {e}")
+
+        logger.debug("No screensaver image found in cache directory")
 
     def _render(self):
         """Render the current mode's display."""

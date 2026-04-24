@@ -79,7 +79,7 @@ curl http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash
 This installs `pisugar-server` which exposes an HTTP/WebSocket API and also GPIO event support.
 
 ### 3.2 Button Detection Strategy
-The PiSugar 2 button is accessible via the PiSugar server API at `127.0.0.1:8421`. Use the **WebSocket** interface to listen for button events in real time.
+The PiSugar 2 button is accessible via the PiSugar server API at `127.0.0.1:8423`. Use the **Socket** interface to listen for button events in real time.
 
 Alternatively, the button can be mapped to a GPIO pin directly — check PiSugar 2 docs for your revision.
 
