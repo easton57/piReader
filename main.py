@@ -56,6 +56,10 @@ class Application:
         self.display = EPaperDisplay(debug_mode=self.debug)
 
         # Initialize file browser
+        logger.info(f"Library path: {LIBRARY_PATH}")
+        logger.info(f"Library path exists: {os.path.exists(LIBRARY_PATH)}")
+        if os.path.exists(LIBRARY_PATH):
+            logger.info(f"Library contents: {os.listdir(LIBRARY_PATH)}")
         self.browser = FileBrowser(LIBRARY_PATH)
 
         # Initialize readers
@@ -109,6 +113,7 @@ class Application:
             self._handle_action("shutdown")
 
         # Show screensaver on boot
+        logger.info("Showing screensaver on boot")
         self._show_screensaver()
 
         # Try to restore saved location
@@ -116,6 +121,8 @@ class Application:
             logger.info("Restored saved location")
 
         # Initial render
+        logger.info(f"Browser items count: {len(self.browser.get_items_for_display())}")
+        logger.info("Calling initial _render")
         self._render()
 
         # Start button handler
@@ -364,19 +371,28 @@ class Application:
 
     def _render(self):
         """Render the current mode's display."""
+        logger.info(f"Rendering mode: {self.mode}")
         if self.mode == AppMode.BROWSER:
+            logger.info("Calling _render_browser")
             img = self._render_browser()
         elif self.mode == AppMode.READER:
+            logger.info("Calling reader.render")
             img = self.reader.render()
         elif self.mode == AppMode.PDF:
+            logger.info("Calling pdf_reader.render")
             img = self.pdf_reader.render()
         elif self.mode == AppMode.PDF_SELECT:
+            logger.info("Calling _render_browser for PDF select")
             img = self._render_browser()
         else:
+            logger.info("Showing screensaver")
             img = self._show_screensaver()
 
         if img:
+            logger.info("Displaying image")
             self.display.show(img)
+        else:
+            logger.warning("No image to display")
 
     def _render_browser(self):
         """Render the file browser.
@@ -384,6 +400,9 @@ class Application:
         Returns:
             PIL Image with file list displayed, with lines between items.
         """
+        logger.info(
+            f"Rendering browser - items: {len(self.browser.get_items_for_display())}"
+        )
         from PIL import Image, ImageDraw, ImageFont
 
         img = self.display.create_canvas()

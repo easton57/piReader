@@ -1,6 +1,6 @@
-import os
 import json
-from typing import Optional, List, Tuple
+import os
+from typing import List, Optional, Tuple
 
 
 class FileBrowser:
@@ -32,7 +32,7 @@ class FileBrowser:
         """Load saved location from JSON file."""
         self.saved_location = None
         location_file_path = os.path.join(self.root_path, self.LOCATION_FILE)
-        
+
         if os.path.exists(location_file_path):
             try:
                 with open(location_file_path, "r", encoding="utf-8") as f:
@@ -42,22 +42,18 @@ class FileBrowser:
 
     def save_location(self, file_path: str, page: int) -> None:
         """Save the current location to a JSON file.
-        
+
         Args:
             file_path: The selected file path
             page: The page number when reading
         """
         location_file_path = os.path.join(self.root_path, self.LOCATION_FILE)
-        
+
         # Extract selected_id (the file/folder name) from path
         selected_id = os.path.basename(file_path) if file_path else None
-        
-        location_data = {
-            "path": file_path,
-            "page": page,
-            "selected_id": selected_id
-        }
-        
+
+        location_data = {"path": file_path, "page": page, "selected_id": selected_id}
+
         try:
             with open(location_file_path, "w", encoding="utf-8") as f:
                 json.dump(location_data, f, indent=2)
@@ -70,23 +66,23 @@ class FileBrowser:
 
     def go_to_saved_location(self) -> bool:
         """Restore position - if a file was selected when app closed, select it again.
-        
+
         Returns:
             True if successfully restored to saved location, False otherwise
         """
         if not self.saved_location:
             return False
-        
+
         saved_path = self.saved_location.get("path")
         selected_id = self.saved_location.get("selected_id")
-        
+
         if not saved_path or not selected_id:
             return False
-        
+
         # Navigate to the directory containing the saved file
         saved_dir = os.path.dirname(saved_path)
         saved_filename = os.path.basename(saved_path)
-        
+
         # If saved path is the current directory, refresh and find item
         if saved_dir == self.current_path:
             self._refresh()
@@ -106,17 +102,19 @@ class FileBrowser:
                     self.cursor_position = i
                     self.selected_index = i
                     return True
-        
+
         return False
 
     def _refresh(self) -> None:
         """Refresh the current directory contents."""
+        logger.info("Refreshing file browser...")
         self.items = []
         self.cursor_position = 0
         self.selected_index = None
 
         try:
             entries = os.listdir(self.current_path)
+            logger.info(f"Found {len(entries)} items in directory")
         except OSError:
             entries = []
 
@@ -130,6 +128,7 @@ class FileBrowser:
 
             if is_dir or self._is_supported_file(entry):
                 self.items.append((entry, is_dir))
+        logger.info(f"Updated items list with {len(self.items)} entries")
 
     def _is_supported_file(self, filename: str) -> bool:
         """Check if a file is a supported document type."""
