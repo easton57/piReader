@@ -354,7 +354,6 @@ class Application:
                     if img.size != (DISPLAY_WIDTH, DISPLAY_HEIGHT):
                         img = img.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT), Image.LANCZOS)
                     self.display.show(img, partial=False)
-                    time.sleep(1.5)  # Wait for e-paper refresh to complete
                     time.sleep(2)  # Display screensaver for 2 seconds
                     logger.info("Screensaver showing")
                     return
@@ -455,6 +454,7 @@ class Application:
         elapsed = time.time() - self.last_activity
         if elapsed >= IDLE_TIMEOUT:
             logger.info(f"Idle for {elapsed:.0f}s, sleeping...")
+            self._show_screensaver()
             self.display.sleep()
             # Wait for button press to wake
             while self.running and (time.time() - self.last_activity) >= IDLE_TIMEOUT:
