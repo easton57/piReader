@@ -1,6 +1,9 @@
 import json
+import logging
 import os
 from typing import List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class FileBrowser:
@@ -32,8 +35,10 @@ class FileBrowser:
         """Load saved location from JSON file."""
         self.saved_location = None
         location_file_path = os.path.join(self.root_path, self.LOCATION_FILE)
+        logger.debug(f"Looking for saved location at: {location_file_path}")
 
         if os.path.exists(location_file_path):
+            logger.info("Saved location file exists")
             try:
                 with open(location_file_path, "r", encoding="utf-8") as f:
                     self.saved_location = json.load(f)
@@ -107,15 +112,16 @@ class FileBrowser:
 
     def _refresh(self) -> None:
         """Refresh the current directory contents."""
-        logger.info("Refreshing file browser...")
+        logger.info(f"Refreshing file browser for path: {self.current_path}")
         self.items = []
         self.cursor_position = 0
         self.selected_index = None
 
         try:
             entries = os.listdir(self.current_path)
-            logger.info(f"Found {len(entries)} items in directory")
-        except OSError:
+            logger.info(f"Found {len(entries)} entries in directory")
+        except OSError as e:
+            logger.error(f"Error listing directory: {e}")
             entries = []
 
         for entry in sorted(entries):
@@ -127,7 +133,9 @@ class FileBrowser:
             is_dir = os.path.isdir(full_path)
 
             if is_dir or self._is_supported_file(entry):
+                logger.debug(f"Adding entry: {entry} (is_dir={is_dir})")
                 self.items.append((entry, is_dir))
+        logger.info(f"Total items after refresh: {len(self.items)}")
         logger.info(f"Updated items list with {len(self.items)} entries")
 
     def _is_supported_file(self, filename: str) -> bool:
