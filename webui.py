@@ -4,9 +4,6 @@ Flask web application for the e-reader.
 
 import logging
 import os
-import socket
-import time
-import urllib.request
 
 from flask import (
     Flask,
@@ -19,59 +16,29 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-try:
-    import RPi.GPIO as GPIO
+from config import CACHE_DIR, LIBRARY_PATH, MAX_UPLOAD_MB, SUPPORTED_EXTENSIONS
+from pisugar import get_battery_percentage as _battery
 
-    IS_PI = True
-except ImportError:
-    IS_PI = False
+IS_PI = os.path.exists("/proc/device-tree/model")
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-key")
-
-try:
-    from config import CACHE_DIR, LIBRARY_PATH
-except ImportError:
-    LIBRARY_PATH = "library"
-    CACHE_DIR = "cache"
+app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(16)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 UPLOAD_FOLDER = LIBRARY_PATH
 SCREENSAVER_FOLDER = CACHE_DIR
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["SCREENSAVER_FOLDER"] = SCREENSAVER_FOLDER
-
-SUPPORTED_EXTENSIONS = {".txt", ".epub", ".pdf"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp"}
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
 def get_battery_percentage():
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect(("127.0.0.1", 8423))
-            s.sendall(b"get battery")
-            bat = s.recv(1024).decode().strip()
-            bat = bat.split(":")[1]
-            return float(bat)
-    except Exception as e:
-        logger.error(f"Failed to get battery percentage: {e}")
-        return 0.0
-
-
-def get_page_count():
-    return 0
+    value = _battery()
+    return value if value is not None else 0
 
 
 def ensure_directory(path):
     os.makedirs(path, exist_ok=True)
-
-
-def is_running_on_pi():
-    return IS_PI
 
 
 def get_library_files():
@@ -79,22 +46,16 @@ def get_library_files():
     if os.path.exists(UPLOAD_FOLDER):
         for fn in os.listdir(UPLOAD_FOLDER):
             fp = os.path.join(UPLOAD_FOLDER, fn)
-            if os.path.isfile(fp):
-                _, ext = os.path.splitext(fn.lower())
-                if ext in SUPPORTED_EXTENSIONS:
-                    files.append(
-                        {
-                            "name": fn,
-                            "path": fp,
-                            "size": os.path.getsize(fp),
-                            "extension": ext,
-                        }
-                    )
+            _, ext = os.path.splitext(fn.lower())
+            if os.path.isfile(fp) and not fn.startswith(".") and ext in SUPPORTED_EXTENSIONS:
+                files.append(
+                    {"name": fn, "path": fp, "size": os.path.getsize(fp), "extension": ext}
+                )
     return sorted(files, key=lambda x: x["name"].lower())
 
 
 def get_current_screensaver():
-    for ext in IMAGE_EXTENSIONS:
+    for ext in sorted(IMAGE_EXTENSIONS):
         ip = os.path.join(SCREENSAVER_FOLDER, "screensaver" + ext)
         if os.path.exists(ip):
             return ip
@@ -102,7 +63,7 @@ def get_current_screensaver():
 
 
 def format_file_size(sb):
-    for u in ["B", "KB", "MB", "GB"]:
+    for u in ["B", "KB", "MB"]:
         if sb < 1024.0:
             return f"{sb:.0f} {u}"
         sb /= 1024.0
@@ -169,8 +130,8 @@ h1{font-size:1.5rem;color:#222}
 {%with messages=get_flashed_messages(with_categories=true)%}{%if messages%}<div class="flash-messages">{%for category,message in messages%}<div class="flash {{category}}">{{message}}</div>{%endfor%}</div>{%endif%}{%endwith%}
 <div class="card"><h2>Status</h2><div class="status-info"><div class="status-item"><span class="status-label">Battery</span><span class="status-value">{{battery}}%</span></div><div class="status-item"><span class="status-label">Books</span><span class="status-value">{{books|length}}</span></div><div class="status-item"><span class="status-label">Running on Pi</span><span class="status-value">{{"Yes" if is_pi else "No"}}</span></div></div></div>
 <div class="card"><h2>Screensaver</h2><div class="screensaver">{%if screensaver%}<div class="screensaver-thumb"><img src="{{url_for("screensaver_file",filename=screensaver_filename)}}" alt="Current screensaver"></div><div><p style="margin-bottom:12px">Current screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Change Screensaver</button></form></div>{%else%}<div class="empty-state" style="padding:20px;text-align:left"><p style="margin-bottom:12px">No screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Set Screensaver</button></form></div>{%endif%}</div></div>
-<div class="card"><h2>Library ({{books|length}} books)</h2>{%if books%}<ul class="file-list">{%for book in books%}<li class="file-item"><div class="file-info"><span class="file-ext {{book.extension[1:]}}">{{book.extension[1:]}}</span><span class="file-name">{{book.name}}</span><span class="file-size">{{book.size_formatted}}</span></div><form action="{{url_for("delete_file",filename=book.name)}}" method="post"><button type="submit" class="delete-btn" onclick="return confirm("Delete {{book.name}}?")">Delete</button></form></li>{%endfor%}</ul>{%else%}<div class="empty-state"><p>No books in library</p><p style="font-size:0.85rem;margin-top:8px">Upload .txt, .epub, or .pdf files below</p></div>{%endif%}</div>
-<div class="card"><h2>Upload Books</h2><form action="{{url_for("upload")}}" method="post" enctype="multipart/form-data" class="upload-form"><input type="file" name="file" accept=".txt,.epub,.pdf" required><button type="submit" class="btn">Upload</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Supported formats: .txt, .epub, .pdf (max 50MB)</p></div>
+<div class="card"><h2>Library ({{books|length}} books)</h2>{%if books%}<ul class="file-list">{%for book in books%}<li class="file-item"><div class="file-info"><span class="file-ext {{book.extension[1:]}}">{{book.extension[1:]}}</span><span class="file-name">{{book.name}}</span><span class="file-size">{{book.size_formatted}}</span></div><form action="{{url_for("delete_file",filename=book.name)}}" method="post"><button type="submit" class="delete-btn" onclick="return confirm('Delete ' + this.dataset.name + '?')" data-name="{{book.name}}">Delete</button></form></li>{%endfor%}</ul>{%else%}<div class="empty-state"><p>No books in library</p><p style="font-size:0.85rem;margin-top:8px">Upload .txt, .md, .epub, or .pdf files below</p></div>{%endif%}</div>
+<div class="card"><h2>Upload Books</h2><form action="{{url_for("upload")}}" method="post" enctype="multipart/form-data" class="upload-form"><input type="file" name="file" multiple accept=".txt,.md,.epub,.pdf" required><button type="submit" class="btn">Upload</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Supported formats: .txt, .md, .epub, .pdf (max {{max_mb}}MB)</p></div>
 </div>
 </body>
 </html>
@@ -195,33 +156,32 @@ def index():
         screensaver=screensaver,
         screensaver_filename=screensaver_filename,
         is_pi=IS_PI,
+        max_mb=MAX_UPLOAD_MB,
     )
 
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    if "file" not in request.files:
+    files = [f for f in request.files.getlist("file") if f and f.filename]
+    if not files:
         flash("No file selected", "error")
         return redirect(url_for("index"))
-    file = request.files["file"]
-    if file.filename == "":
-        flash("No file selected", "error")
-        return redirect(url_for("index"))
-    _, ext = os.path.splitext(file.filename.lower())
-    if ext not in SUPPORTED_EXTENSIONS:
-        flash(f"Unsupported file type: {ext}", "error")
-        return redirect(url_for("index"))
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    if os.path.exists(filepath):
+    ensure_directory(UPLOAD_FOLDER)
+    for file in files:
+        _, ext = os.path.splitext(file.filename.lower())
+        if ext not in SUPPORTED_EXTENSIONS:
+            flash(f"Skipped {file.filename}: unsupported type {ext}", "error")
+            continue
+        filename = secure_filename(file.filename) or f"upload{ext}"
         base, ext = os.path.splitext(filename)
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
         counter = 1
         while os.path.exists(filepath):
             filename = f"{base}_{counter}{ext}"
             filepath = os.path.join(UPLOAD_FOLDER, filename)
             counter += 1
-    file.save(filepath)
-    flash(f"Uploaded {filename} successfully", "success")
+        file.save(filepath)
+        flash(f"Uploaded {filename}", "success")
     return redirect(url_for("index"))
 
 
@@ -241,30 +201,15 @@ def screensaver():
     ensure_directory(SCREENSAVER_FOLDER)
     filename = f"screensaver{ext}"
     filepath = os.path.join(SCREENSAVER_FOLDER, filename)
-    if os.path.exists(filepath):
-        os.remove(filepath)
     file.save(filepath)
 
-    try:
-        from PIL import Image
-
-        from display import HEIGHT, WIDTH, EPaperDisplay
-
-        display = EPaperDisplay(debug_mode=False)
-        if display.initialized:
-            img = Image.open(filepath)
-            img = img.resize((WIDTH, HEIGHT), Image.LANCZOS)
-            display.show(img, partial=False)
-            time.sleep(2)
-            display.clear()
-            display.sleep()
-            flash("Screensaver set and shown on display", "success")
-        else:
-            flash("Screensaver saved (display not available)", "success")
-    except Exception as e:
-        logger.error(f"Display update failed: {e}")
-        flash("Screensaver saved", "success")
-
+    for old_ext in IMAGE_EXTENSIONS:  # only keep one screensaver
+        old = os.path.join(SCREENSAVER_FOLDER, "screensaver" + old_ext)
+        if old != filepath and os.path.exists(old):
+            os.remove(old)
+    # The reader shows it on idle/shutdown. Don't touch the panel from here:
+    # the main loop owns it, and a second driver instance fights over SPI/GPIO.
+    flash("Screensaver saved", "success")
     return redirect(url_for("index"))
 
 
@@ -277,19 +222,21 @@ def screensaver_file(filename):
 
 @app.route("/delete/<path:filename>", methods=["POST"])
 def delete_file(filename):
-    safe_name = secure_filename(filename)
-    filepath = os.path.join(UPLOAD_FOLDER, safe_name)
-    if not os.path.exists(filepath):
+    names = {f["name"] for f in get_library_files()}
+    if filename not in names:
         flash("File not found", "error")
         return redirect(url_for("index"))
-    if not os.path.isfile(filepath):
-        flash("Cannot delete directories", "error")
-        return redirect(url_for("index"))
     try:
-        os.remove(filepath)
-        flash(f"Deleted {safe_name} successfully", "success")
-    except Exception as e:
-        flash(f"Error deleting file: {str(e)}", "error")
+        os.remove(os.path.join(UPLOAD_FOLDER, filename))
+        flash(f"Deleted {filename}", "success")
+    except OSError as e:
+        flash(f"Error deleting file: {e}", "error")
+    return redirect(url_for("index"))
+
+
+@app.errorhandler(413)
+def too_large(_):
+    flash(f"File too large (max {MAX_UPLOAD_MB}MB)", "error")
     return redirect(url_for("index"))
 
 
@@ -298,7 +245,6 @@ def status():
     return jsonify(
         {
             "battery": get_battery_percentage(),
-            "page_count": get_page_count(),
             "is_pi": IS_PI,
             "library_path": UPLOAD_FOLDER,
             "cache_dir": SCREENSAVER_FOLDER,
@@ -313,4 +259,5 @@ if __name__ == "__main__":
     logger.info(f"Library path: {UPLOAD_FOLDER}")
     logger.info(f"Cache dir: {SCREENSAVER_FOLDER}")
     logger.info(f"Running on Pi: {IS_PI}")
+    logging.basicConfig(level=logging.INFO)
     app.run(host="0.0.0.0", port=5000, debug=False)

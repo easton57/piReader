@@ -1,11 +1,25 @@
-"""
-E-Reader application main entry point.
+"""piReader entry point.
+
+Threads:
+  - Button thread (PiSugar events) and optional stdin thread (--mock) only
+    put gestures on a queue.
+  - The main thread owns all state and the display: it drains the queue,
+    applies every pending action, then renders once. The tri-colour panel takes
+    ~15s per refresh, so coalescing queued taps matters.
 """
 
+import argparse
 import logging
 import os
+import queue
+import socket
+import subprocess
+import sys
+import threading
 import time
 from enum import Enum
+
+from PIL import Image, ImageDraw
 
 from button import ButtonHandler
 from config import (
@@ -13,499 +27,386 @@ from config import (
     DEBUG_MODE,
     DISPLAY_HEIGHT,
     DISPLAY_WIDTH,
-    FILES_PER_SCREEN,
-    FONT_PATH,
     FONT_SIZE,
     IDLE_TIMEOUT,
     LIBRARY_PATH,
-    MARGIN_BOTTOM,
     MARGIN_LEFT,
     MARGIN_RIGHT,
     MARGIN_TOP,
+    SHUTDOWN_COMMAND,
+    WEBUI_PORT,
 )
-from display import EPaperDisplay
+from display import EPaperDisplay, load_font
+from documents import load_text
 from file_browser import FileBrowser
 from pdf_reader import PDFReader
-from reader import TextReader
+from reader import TextReader, cached_battery
 
 logger = logging.getLogger(__name__)
-handler = ButtonHandler()
+
+STATE_FILE = os.path.join(CACHE_DIR, "state.json")
+SCREENSAVER_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
+
+# Gesture -> action. Long press and 4 taps both mean "back".
+GESTURES = {1: "next", 2: "prev", 3: "select", 4: "back", "long": "back", 5: "shutdown"}
 
 
 class AppMode(Enum):
-    """Application modes."""
-
     BROWSER = "browser"
-    READER = "reader"
-    PDF = "pdf"
-    PDF_SELECT = "pdf_select"
+    READER = "reader"  # reflowed text: txt, md, epub, text PDFs
+    PDF_IMAGE = "pdf_image"  # rasterized PDF pages
+
+
+def local_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))  # no packets sent; just picks a route
+            return s.getsockname()[0]
+    except OSError:
+        return None
 
 
 class Application:
-    """Main e-reader application."""
-
-    def __init__(self, debug=None):
-        """Initialize the application.
-
-        Args:
-            debug: If True, run in debug mode. Defaults to DEBUG_MODE from config.
-        """
-        self.debug = debug if debug is not None else DEBUG_MODE
-
-        # Initialize display
-        self.display = EPaperDisplay(debug_mode=self.debug)
-
-        # Initialize file browser
-        logger.info(f"Library path: {LIBRARY_PATH}")
-        logger.info(f"Library path exists: {os.path.exists(LIBRARY_PATH)}")
-        if os.path.exists(LIBRARY_PATH):
-            logger.info(f"Library contents: {os.listdir(LIBRARY_PATH)}")
-        self.browser = FileBrowser(LIBRARY_PATH)
-
-        # Initialize readers
-        self.reader = TextReader(font_path=FONT_PATH, font_size=FONT_SIZE)
+    def __init__(self, mock=False):
+        self.display = EPaperDisplay(mock=mock)
+        self.browser = FileBrowser(LIBRARY_PATH, STATE_FILE)
+        self.reader = TextReader(font_size=FONT_SIZE)
         self.pdf_reader = PDFReader(cache_dir=CACHE_DIR)
+        self.font = load_font(FONT_SIZE)
+        self.small_font = load_font(9)
 
-        # Current mode
         self.mode = AppMode.BROWSER
-
-        # Current file being read
         self.current_file = None
-
-        # Last activity time for idle checking
-        self.last_activity = time.time()
-
-        # Running flag
+        self.actions = queue.Queue()
+        self.last_activity = time.monotonic()
+        self.idle = False
         self.running = False
+        self.notice = None  # one-shot message shown in the browser header
 
-        # Button handler
-        self.handler = handler
+        self.buttons = ButtonHandler()
+        for gesture, action in GESTURES.items():
+            self.buttons.on_click(gesture)(lambda a=action: self.actions.put(a))
+
+    # --- lifecycle -------------------------------------------------------
 
     def start(self):
-        """Start the application main loop."""
-        logger.info("Starting application...")
         self.running = True
-
-        # Register button callbacks
-        @self.handler.on_click(1)
-        def single_click():
-            logger.info("Single click detected")
-            self._handle_action("down")
-
-        @self.handler.on_click(2)
-        def double_click():
-            logger.info("Double click detected")
-            self._handle_action("up")
-
-        @self.handler.on_click(3)
-        def triple_click():
-            logger.info("Triple click detected")
-            self._handle_action("select")
-
-        @self.handler.on_click(4)
-        def quad_click():
-            logger.info("Quad click detected")
-            self._handle_action("hold")
-
-        @self.handler.on_click(5)
-        def pent_click():
-            logger.info("Pent click detected")
-            self._handle_action("shutdown")
-
-        # Show screensaver on boot
-        logger.info("Showing screensaver on boot")
-        self._show_screensaver()
-
-        # Try to restore saved location
-        if self.browser.go_to_saved_location():
-            logger.info("Restored saved location")
-
-        # Initial render
-        logger.info(f"Browser items count: {len(self.browser.get_items_for_display())}")
-        logger.info("Calling initial _render")
+        last = self.browser.get_last_open()
+        if last:
+            logger.info(f"Resuming {last}")
+            self.browser.reveal(last)
+            self._open(last)
         self._render()
+        self.buttons.start()
 
-        # Start button handler
-        self.handler.start()
-
-        # Main loop
         try:
             while self.running:
-                self._check_idle()
-                time.sleep(0.1)
+                try:
+                    pending = [self.actions.get(timeout=1.0)]
+                except queue.Empty:
+                    self._check_idle()
+                    continue
+                # Small grace period so a burst of gestures renders once.
+                time.sleep(0.05)
+                while not self.actions.empty():
+                    pending.append(self.actions.get_nowait())
+                self._handle_actions(pending)
         except KeyboardInterrupt:
-            logger.info("Keyboard interrupt received")
+            logger.info("Interrupted")
+        finally:
             self.stop()
 
     def stop(self):
-        """Stop the application and cleanup."""
-        logger.info("Stopping application...")
         self.running = False
-        self.handler.stop()  # Stop button handler on exit
-
-        # Save current location if in reader mode
-        if self.current_file:
-            if self.mode == AppMode.READER:
-                self.browser.save_location(self.current_file, self.reader.current_page)
-            elif self.mode == AppMode.PDF:
-                self.browser.save_location(
-                    self.current_file, self.pdf_reader.get_current_page()
-                )
-
-        # Sleep display
+        self.buttons.stop()
+        self._save_progress()
         self.display.sleep()
+        logger.info("Stopped")
 
-        logger.info("Application stopped")
+    # --- actions ---------------------------------------------------------
 
-    def _handle_action(self, action):
-        """Handle button action and route to appropriate mode handler.
+    def _handle_actions(self, actions):
+        self.last_activity = time.monotonic()
+        woke = self.idle
+        self.idle = False
+        if woke:
+            # The screensaver is up: first gesture just brings the page back.
+            actions = actions[1:]
+        before = None if woke else self._view_state()
 
-        Args:
-            action: The action string from button handler
-        """
-        # Reset idle timer on any action
-        self.last_activity = time.time()
-
-        # Check for shutdown first
-        if action == "shutdown":
-            self._handle_shutdown_action(action)
-            return
-
-        # Route to mode-specific handler
-        if self.mode == AppMode.BROWSER:
-            self._handle_browser_action(action)
-        elif self.mode == AppMode.READER:
-            self._handle_reader_action(action)
-        elif self.mode == AppMode.PDF:
-            self._handle_pdf_action(action)
-        elif self.mode == AppMode.PDF_SELECT:
-            self._handle_pdf_action(action)
-
-    def _handle_browser_action(self, action):
-        """Handle actions in browser mode.
-
-        Args:
-            action: The action string (up/down/select/hold)
-        """
-        if action == "up":
-            self.browser.move_up()
+        for action in actions:
+            logger.info(f"Action: {action} ({self.mode.value})")
+            if action == "shutdown":
+                self._shutdown()
+                return
+            if self.mode == AppMode.BROWSER:
+                self._browser_action(action)
+            else:
+                self._reader_action(action)
+        # Skip the (slow) refresh when nothing visible changed.
+        if self._view_state() != before:
             self._render()
-        elif action == "down":
+
+    def _view_state(self):
+        if self.mode == AppMode.BROWSER:
+            items = tuple(self.browser.get_items_for_display())
+            return (self.mode, self.browser.get_current_dir(), self.browser.get_cursor_position(), items, self.notice)
+        return (self.mode, self.current_file, self._active_reader().get_current_page())
+
+    def _browser_action(self, action):
+        if action == "next":
             self.browser.move_down()
-            self._render()
-        elif action == "select":
-            self._handle_browser_select()
-        elif action == "hold":
-            # Go up a directory
+        elif action == "prev":
+            self.browser.move_up()
+        elif action == "back":
             self.browser.go_up()
-            self._render()
-
-    def _handle_browser_select(self):
-        """Handle file selection in browser mode."""
-        self.browser.select()
-        selected_path = self.browser.get_selected_path()
-
-        if not selected_path:
-            return
-
-        # Check if it's a directory
-        if os.path.isdir(selected_path):
-            # Navigate into directory
-            self.browser.refresh()
-            self._render()
-            return
-
-        # Get file extension
-        _, ext = os.path.splitext(selected_path.lower())
-
-        if ext == ".pdf":
-            # For PDFs, open in select mode first to choose render mode
-            self.current_file = selected_path
-            self.mode = AppMode.PDF_SELECT
-            # Default to image mode
-            if self.pdf_reader.open(selected_path, mode="image"):
-                self.mode = AppMode.PDF
-            else:
-                # Fall back to text mode if image mode fails
-                if self.pdf_reader.open(selected_path, mode="text"):
-                    self.mode = AppMode.PDF
-                else:
-                    # Can't open PDF, go back to browser
-                    self.mode = AppMode.BROWSER
-                    self.current_file = None
-        elif ext in (".txt", ".md"):
-            # Open text file
-            self.current_file = selected_path
-            if self.reader.open(selected_path):
-                self.mode = AppMode.READER
-            else:
-                # Can't open file, stay in browser
-                self.current_file = None
-        else:
-            # Unsupported file type, go back to browser
-            logger.info(f"Unsupported file type: {ext}")
-
-        self._render()
-
-    def _handle_reader_action(self, action):
-        """Handle actions in reader mode.
-
-        Args:
-            action: The action string (next/prev/hold)
-        """
-        if action == "down" or action == "next":
-            self.reader.next_page()
-            self._render()
-        elif action == "up" or action == "prev":
-            self.reader.prev_page()
-            self._render()
-        elif action == "hold":
-            # Exit reader and return to browser
-            self.mode = AppMode.BROWSER
-            self.current_file = None
-            # Save location before exiting
-            self.browser.save_location(None, 0)
-            self._render()
         elif action == "select":
-            # Toggle between image and text mode for PDFs
-            pass
+            path = self.browser.get_selected_path()
+            if not path:
+                return
+            if os.path.isdir(path):
+                self.browser.enter(path)
+            else:
+                self._open(path)
 
-    def _handle_pdf_action(self, action):
-        """Handle actions in PDF mode.
-
-        Args:
-            action: The action string (next/prev/hold)
-        """
-        if action == "down" or action == "next":
-            self.pdf_reader.next_page()
-            self._render()
-        elif action == "up" or action == "prev":
-            self.pdf_reader.prev_page()
-            self._render()
-        elif action == "hold":
-            # Exit PDF reader and return to browser
+    def _reader_action(self, action):
+        doc = self._active_reader()
+        if action == "next":
+            doc.next_page()
+        elif action == "prev":
+            doc.prev_page()
+        elif action == "select" and self.current_file.lower().endswith(".pdf"):
+            self._toggle_pdf_mode()
+            return
+        elif action == "back":
+            self._save_progress()
+            self.browser.set_last_open(None)
+            self.browser.reveal(self.current_file)
             self.mode = AppMode.BROWSER
             self.current_file = None
-            # Save location before exiting
-            self.browser.save_location(None, 0)
-            self._render()
+            return
+        self._save_progress()
 
-    def _handle_shutdown_action(self, action):
-        """Handle shutdown action.
+    def _active_reader(self):
+        return self.pdf_reader if self.mode == AppMode.PDF_IMAGE else self.reader
 
-        Args:
-            action: The action string (should be "shutdown")
-        """
-        if action == "shutdown":
-            self._do_shutdown()
+    def _open(self, path):
+        """Open a document, restoring its saved page. Returns True on success."""
+        progress = self.browser.get_progress(path)
+        is_pdf = path.lower().endswith(".pdf")
+        mode = AppMode.READER
+        if is_pdf and progress.get("mode") == AppMode.PDF_IMAGE.value:
+            mode = AppMode.PDF_IMAGE
 
-    def _do_shutdown(self):
-        """Perform shutdown sequence."""
-        logger.info("Shutting down...")
+        if is_pdf:  # text extraction can take a while on a Pi Zero
+            self._show_message(f"Opening {os.path.basename(path)}...")
+        ok = False
+        if mode == AppMode.READER:
+            try:
+                text = load_text(path, CACHE_DIR)
+                if text.strip() or not is_pdf:
+                    self.reader.load_text(text, title=os.path.basename(path))
+                    ok = True
+                else:
+                    logger.info("PDF has no text layer, using page images")
+                    mode = AppMode.PDF_IMAGE
+            except Exception as e:
+                logger.error(f"Couldn't open {path}: {e}")
+                if is_pdf:
+                    mode = AppMode.PDF_IMAGE
+        if mode == AppMode.PDF_IMAGE:
+            ok = self.pdf_reader.open(path)
 
-        # Show shutdown message on display
-        self._show_shutdown_message()
+        if not ok:
+            self.notice = f"Can't open {os.path.basename(path)}"
+            self.mode = AppMode.BROWSER
+            self.current_file = None
+            return False
 
-        # Save current location
-        if self.current_file:
-            if self.mode == AppMode.READER:
-                self.browser.save_location(self.current_file, self.reader.current_page)
-            elif self.mode == AppMode.PDF:
-                self.browser.save_location(
-                    self.current_file, self.pdf_reader.get_current_page()
-                )
+        self.mode = mode
+        self.current_file = path
+        if progress.get("mode") == mode.value:
+            self._active_reader().set_page(progress.get("page", 0))
+        self._save_progress()
+        return True
 
-        # Stop running
-        self.running = False
-        # Note: Button handler is stopped in the stop() method to avoid double-stop
-
-    def _show_shutdown_message(self):
-        """Show shutdown message on display."""
-        from PIL import Image, ImageDraw, ImageFont
-
-        img = self.display.create_canvas()
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        draw = ImageDraw.Draw(img)
-
-        # Load font or use default
-        try:
-            font = ImageFont.truetype(FONT_PATH, 20)
-        except Exception:
-            font = ImageFont.load_default()
-
-        # Draw shutdown message
-        text = "Shutting down..."
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        x = (DISPLAY_WIDTH - text_width) // 2
-        y = (DISPLAY_HEIGHT - text_height) // 2
-
-        draw.text((x, y), text, fill=0, font=font)
-
-        # Display (not partial refresh)
-        self.display.show(img, partial=False)
-
-    def _show_screensaver(self):
-        """Show screensaver image on boot."""
-        from PIL import Image
-
-        logger.debug("Looking for screensaver image...")
-        for ext in [".png", ".jpg", ".jpeg", ".bmp", ".gif"]:
-            screensaver_path = os.path.join(CACHE_DIR, "screensaver" + ext)
-            if os.path.exists(screensaver_path):
-                logger.info(f"Found screensaver: {screensaver_path}")
-                try:
-                    img = Image.open(screensaver_path)
-                    if img.size != (DISPLAY_WIDTH, DISPLAY_HEIGHT):
-                        img = img.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT), Image.LANCZOS)
-                    self.display.show(img, partial=False)
-                    time.sleep(2)  # Display screensaver for 2 seconds
-                    logger.info("Screensaver showing")
-                    return
-                except Exception as e:
-                    logger.error(f"Failed to show screensaver: {e}")
-
-        logger.debug("No screensaver image found in cache directory")
-
-    def _render(self):
-        """Render the current mode's display."""
-        logger.info(f"Rendering mode: {self.mode}")
-        if self.mode == AppMode.BROWSER:
-            logger.info("Calling _render_browser")
-            img = self._render_browser()
-        elif self.mode == AppMode.READER:
-            logger.info("Calling reader.render")
-            img = self.reader.render()
-        elif self.mode == AppMode.PDF:
-            logger.info("Calling pdf_reader.render")
-            img = self.pdf_reader.render()
-        elif self.mode == AppMode.PDF_SELECT:
-            logger.info("Calling _render_browser for PDF select")
-            img = self._render_browser()
+    def _toggle_pdf_mode(self):
+        if self.mode == AppMode.READER:
+            if self.pdf_reader.open(self.current_file):
+                self.mode = AppMode.PDF_IMAGE
         else:
-            logger.info("Showing screensaver")
-            img = self._show_screensaver()
+            try:
+                text = load_text(self.current_file, CACHE_DIR)
+            except Exception as e:
+                logger.error(f"Text extraction failed: {e}")
+                text = ""
+            if text.strip():
+                self.reader.load_text(text)
+                self.mode = AppMode.READER
+        saved = self.browser.get_progress(self.current_file)
+        if saved.get("mode") == self.mode.value:
+            self._active_reader().set_page(saved.get("page", 0))
+        self._save_progress()
 
-        if img:
-            logger.info("Displaying image")
-            self.display.show(img)
-        else:
-            logger.warning("No image to display")
+    def _save_progress(self):
+        if self.current_file and self.mode != AppMode.BROWSER:
+            self.browser.save_progress(
+                self.current_file,
+                self._active_reader().get_current_page(),
+                self.mode.value,
+            )
 
-    def _render_browser(self):
-        """Render the file browser.
-
-        Returns:
-            PIL Image with file list displayed, with lines between items.
-        """
-        logger.info(
-            f"Rendering browser - items: {len(self.browser.get_items_for_display())}"
-        )
-        from PIL import Image, ImageDraw, ImageFont
-
-        img = self.display.create_canvas()
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        draw = ImageDraw.Draw(img)
-
-        # Load font
-        try:
-            font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
-        except Exception:
-            font = ImageFont.load_default()
-
-        # Get items to display
-        items = self.browser.get_items_for_display()
-        cursor_pos = self.browser.get_cursor_position()
-
-        # Calculate visible range
-        start_idx = max(0, cursor_pos - FILES_PER_SCREEN // 2)
-        end_idx = min(len(items), start_idx + FILES_PER_SCREEN)
-        if end_idx - start_idx < FILES_PER_SCREEN:
-            start_idx = max(0, end_idx - FILES_PER_SCREEN)
-
-        # Render items
-        y = MARGIN_TOP
-        line_height = FONT_SIZE + 2
-
-        for i in range(start_idx, end_idx):
-            name, is_dir = items[i]
-
-            # Truncate long filenames
-            # Calculate max characters that fit: (available width) / (approx width per char)
-            # Approx width per char is FONT_SIZE // 2 for monospace font
-            max_len = (DISPLAY_WIDTH - MARGIN_LEFT - MARGIN_RIGHT) // (FONT_SIZE // 2)
-            if len(name) > max_len:
-                name = name[: max_len - 3] + "..."
-
-            # Add indicator for directories
-            display_name = name + "/" if is_dir else name
-
-            # Highlight current position
-            if i == cursor_pos:
-                draw.rectangle(
-                    [(MARGIN_LEFT, y), (DISPLAY_WIDTH - MARGIN_RIGHT, y + line_height)],
-                    fill=0,
-                )
-                draw.text((MARGIN_LEFT, y), display_name, fill=255, font=font)
-            else:
-                draw.text((MARGIN_LEFT, y), display_name, fill=0, font=font)
-
-            # Draw line between items (except after last item if it's the last on screen)
-            if i < end_idx - 1:
-                line_y = y + line_height
-                draw.line(
-                    [(MARGIN_LEFT, line_y), (DISPLAY_WIDTH - MARGIN_RIGHT, line_y)],
-                    fill=192,
-                )
-
-            y += line_height + 1
-
-        return img
+    # --- idle / shutdown -------------------------------------------------
 
     def _check_idle(self):
-        """Check if the application has been idle too long and sleep."""
-        if IDLE_TIMEOUT <= 0:
+        if IDLE_TIMEOUT <= 0 or self.idle:
             return
-
-        elapsed = time.time() - self.last_activity
-        if elapsed >= IDLE_TIMEOUT:
-            logger.info(f"Idle for {elapsed:.0f}s, sleeping...")
+        if time.monotonic() - self.last_activity >= IDLE_TIMEOUT:
+            logger.info("Idle, showing screensaver")
+            self.idle = True
             self._show_screensaver()
             self.display.sleep()
-            # Wait for button press to wake
-            while self.running and (time.time() - self.last_activity) >= IDLE_TIMEOUT:
-                time.sleep(0.1)
-            if self.running:
-                self.display.wake()
+
+    def _shutdown(self):
+        logger.info("Shutting down")
+        self._save_progress()
+        if not self._show_screensaver():
+            self._show_message("Powered off")
+        self.running = False
+        if SHUTDOWN_COMMAND and not self.display.mock:
+            self.display.sleep()
+            try:
+                subprocess.run(SHUTDOWN_COMMAND.split(), check=True, timeout=30)
+            except Exception as e:
+                logger.error(f"Shutdown command failed: {e}")
+
+    # --- rendering -------------------------------------------------------
+
+    def _screensaver_path(self):
+        for ext in SCREENSAVER_EXTS:
+            path = os.path.join(CACHE_DIR, "screensaver" + ext)
+            if os.path.exists(path):
+                return path
+        return None
+
+    def _show_screensaver(self):
+        path = self._screensaver_path()
+        if not path:
+            return False
+        try:
+            img = Image.open(path).convert("L")
+            img.thumbnail((DISPLAY_WIDTH, DISPLAY_HEIGHT), Image.LANCZOS)
+            canvas = self.display.create_canvas()
+            canvas.paste(img, ((DISPLAY_WIDTH - img.width) // 2, (DISPLAY_HEIGHT - img.height) // 2))
+            self.display.show(canvas, dither=True)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to show screensaver: {e}")
+            return False
+
+    def _show_message(self, text):
+        img = self.display.create_canvas()
+        draw = ImageDraw.Draw(img)
+        lines = self.reader._wrap(text) if text else []
+        y = (DISPLAY_HEIGHT - len(lines) * (FONT_SIZE + 2)) // 2
+        for line in lines:
+            w = draw.textlength(line, font=self.font)
+            draw.text(((DISPLAY_WIDTH - w) // 2, y), line, fill=0, font=self.font)
+            y += FONT_SIZE + 2
+        self.display.show(img)
+
+    def _render(self):
+        if self.mode == AppMode.BROWSER:
+            img = self._render_browser()
+        else:
+            img = self._active_reader().render()
+        self.display.show(img, dither=self.mode == AppMode.PDF_IMAGE)
+
+    def _render_browser(self):
+        self.browser.refresh_if_changed()
+        img = self.display.create_canvas()
+        draw = ImageDraw.Draw(img)
+        width = DISPLAY_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
+
+        # Header: folder name + battery
+        folder = "Library" if self.browser.is_root() else os.path.basename(self.browser.get_current_dir())
+        if self.notice:
+            folder, self.notice = self.notice, None
+        battery = cached_battery()
+        right = f"{battery}%" if battery is not None else ""
+        draw.text((MARGIN_LEFT, 1), folder, fill=0, font=self.small_font)
+        draw.text((DISPLAY_WIDTH - MARGIN_RIGHT - draw.textlength(right, font=self.small_font), 1),
+                  right, fill=0, font=self.small_font)
+        header_h = 12
+        draw.line([(0, header_h), (DISPLAY_WIDTH, header_h)], fill=0)
+
+        items = self.browser.get_items_for_display()
+        if not items:
+            ip = local_ip()
+            msg = f"No books yet. Upload at http://{ip}:{WEBUI_PORT}" if ip else "No books yet."
+            y = header_h + 8
+            for line in self.reader._wrap(msg):
+                draw.text((MARGIN_LEFT, y), line, fill=0, font=self.font)
+                y += FONT_SIZE + 2
+            return img
+
+        line_h = FONT_SIZE + 3
+        per_screen = (DISPLAY_HEIGHT - header_h - MARGIN_TOP) // line_h
+        cursor = self.browser.get_cursor_position()
+        start = max(0, min(cursor - per_screen // 2, len(items) - per_screen))
+        y = header_h + 2
+        for i in range(start, min(len(items), start + per_screen)):
+            name, is_dir = items[i]
+            label = name + "/" if is_dir else name
+            if draw.textlength(label, font=self.font) > width:
+                while label and draw.textlength(label + "...", font=self.font) > width:
+                    label = label[:-1]
+                label += "..."
+            if i == cursor:
+                draw.rectangle([(0, y - 1), (DISPLAY_WIDTH, y + line_h - 2)], fill=0)
+                draw.text((MARGIN_LEFT, y), label, fill=255, font=self.font)
+            else:
+                draw.text((MARGIN_LEFT, y), label, fill=0, font=self.font)
+            y += line_h
+        return img
+
+
+def stdin_gestures(app):
+    """--mock helper: type 1-5 (taps) or l (long press) and Enter."""
+    print("Mock input: 1=next 2=prev 3=select 4/l=back 5=shutdown", flush=True)
+    for line in sys.stdin:
+        key = line.strip().lower()
+        gesture = "long" if key == "l" else int(key) if key.isdigit() else None
+        if gesture in GESTURES:
+            app.actions.put(GESTURES[gesture])
 
 
 def main():
-    """Main entry point."""
-    # Configure logging
+    parser = argparse.ArgumentParser(description="piReader")
+    parser.add_argument("--mock", action="store_true",
+                        help="no hardware: frames saved to debug_output.png, input from stdin")
+    parser.add_argument("--no-webui", action="store_true", help="don't start the web UI")
+    parser.add_argument("--debug", action="store_true", help="debug logging")
+    args = parser.parse_args()
+
     logging.basicConfig(
-        level=logging.DEBUG if DEBUG_MODE else logging.INFO,
+        level=logging.DEBUG if (args.debug or DEBUG_MODE) else logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+    os.makedirs(CACHE_DIR, exist_ok=True)
 
-    # Start WebUI in background thread
-    import threading
+    if not args.no_webui:
+        from webui import app as flask_app
 
-    from webui import app as flask_app
+        threading.Thread(
+            target=lambda: flask_app.run(host="0.0.0.0", port=WEBUI_PORT, use_reloader=False),
+            daemon=True, name="WebUI",
+        ).start()
+        logger.info(f"Web UI on port {WEBUI_PORT}")
 
-    webui_thread = threading.Thread(
-        target=lambda: flask_app.run(
-            host="0.0.0.0", port=5000, debug=False, use_reloader=False
-        ),
-        daemon=True,
-    )
-    webui_thread.start()
-    logger.info("WebUI started on port 5000")
-
-    # Create and start application
-    app = Application(debug=DEBUG_MODE)
+    app = Application(mock=args.mock)
+    if args.mock:
+        threading.Thread(target=stdin_gestures, args=(app,), daemon=True).start()
     app.start()
 
 

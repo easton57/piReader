@@ -1,26 +1,40 @@
-"""Button handler with click pattern detection using persistent socket connection."""
+"""PiSugar button listener.
+
+pisugar-server pushes button events to every connected TCP client as lines:
+"single", "double" and "long". It already waits for a possible second tap
+before sending "single", so we just add taps up ("double" = 2) and fire once
+no further tap has arrived for GESTURE_WINDOW seconds. That gives 1..5 tap
+gestures plus long-press.
+
+Callbacks are only *called* from this thread; keep them fast (main.py just
+queues an action) so slow e-ink refreshes don't distort tap timing.
+"""
 
 import logging
 import socket
 import threading
 import time
 
+from config import GESTURE_WINDOW, PISUGAR_HOST, PISUGAR_PORT
+
 logger = logging.getLogger(__name__)
+
+TAP_VALUES = {"single": 1, "double": 2}
 
 
 class ButtonHandler:
-    def __init__(self, click_timeout=0.15):
-        self.click_timeout = click_timeout
-        self.click_count = 0
-        self.last_click_time = 0
+    def __init__(self, gesture_window=GESTURE_WINDOW):
+        self.gesture_window = gesture_window
+        self._callbacks = {}  # {tap_count or "long": callable}
         self._stop_event = threading.Event()
         self._thread = None
-        self._callbacks = {}  # {click_count: callable}
         self._socket = None
-        self._connected = False
+        self._buffer = ""
+        self._taps = 0
+        self._last_tap = 0.0
 
     def on_click(self, count):
-        """Decorator to register a callback for a given click count."""
+        """Decorator: register a callback for N taps, or "long" for a long press."""
 
         def decorator(func):
             self._callbacks[count] = func
@@ -28,148 +42,95 @@ class ButtonHandler:
 
         return decorator
 
+    # --- connection -------------------------------------------------------
+
     def _connect(self):
-        """Establish persistent socket connection to PiSugar server."""
         try:
-            from config import PISUGAR_HOST, PISUGAR_PORT
-
-            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._socket.settimeout(1.0)
-            self._socket.connect((PISUGAR_HOST, PISUGAR_PORT))
-
-            # Send command to start button event streaming
-            self._socket.sendall(b"get button_event\n")
-
-            self._connected = True
-            logger.debug(
-                f"Connected to PiSugar server at {PISUGAR_HOST}:{PISUGAR_PORT}"
+            self._socket = socket.create_connection(
+                (PISUGAR_HOST, PISUGAR_PORT), timeout=2.0
             )
+            self._socket.settimeout(0.1)
+            self._buffer = ""
+            logger.info(f"Connected to pisugar-server at {PISUGAR_HOST}:{PISUGAR_PORT}")
             return True
-        except Exception as e:
-            logger.warning(f"Failed to connect to PiSugar server: {e}")
-            self._connected = False
+        except OSError as e:
+            logger.warning(f"Can't reach pisugar-server: {e}")
+            self._socket = None
             return False
 
     def _disconnect(self):
-        """Close the socket connection."""
         if self._socket:
             try:
                 self._socket.close()
-            except Exception:
+            except OSError:
                 pass
-            self._socket = None
-        self._connected = False
+        self._socket = None
 
-    def _read_event(self):
-        """Read a single button event from the socket."""
-        if not self._connected or not self._socket:
-            return None
-
+    def _read_events(self):
+        """Return any complete event lines received (possibly several)."""
         try:
-            data = self._socket.recv(1024).decode().strip()
-            if not data:
-                # Empty response means connection closed
-                self._connected = False
-                return None
-
-            # Handle "Invalid request." suffix if present
-            if "Invalid request." in data:
-                data = data.replace("Invalid request.", "").strip()
-
-            logger.debug(f"Raw button event: '{data}'")
-            return data
+            data = self._socket.recv(1024)
         except socket.timeout:
-            return None
-        except Exception as e:
-            logger.warning(f"Error reading button event: {e}")
-            self._connected = False
-            return None
+            return []
+        if not data:
+            raise ConnectionError("pisugar-server closed the connection")
+        self._buffer += data.decode(errors="ignore")
+        *lines, self._buffer = self._buffer.split("\n")
+        return [line.strip() for line in lines if line.strip()]
 
-    def _get_button_event(self):
-        """Get button event, maintaining persistent connection."""
-        # Try to connect if not connected
-        if not self._connected:
-            if not self._connect():
-                time.sleep(1.0)  # Wait before retrying connection
-                return None
+    # --- gesture logic ----------------------------------------------------
 
-        # Read event from persistent connection
-        event = self._read_event()
+    def feed(self, event, now=None):
+        """Process one raw event. Public so it can be driven by tests/mock input."""
+        now = time.monotonic() if now is None else now
+        logger.debug(f"Button event: {event!r}")
+        if event == "long":
+            self._taps = 0
+            self._fire("long")
+        elif event in TAP_VALUES:
+            self._taps += TAP_VALUES[event]
+            self._last_tap = now
 
-        # If connection was lost, try to reconnect
-        if event is None and self._connected:
-            self._disconnect()
-            if not self._connect():
-                time.sleep(1.0)
-                return None
-            event = self._read_event()
+    def poll(self, now=None):
+        """Fire the pending tap gesture once the window has passed."""
+        now = time.monotonic() if now is None else now
+        if self._taps and now - self._last_tap >= self.gesture_window:
+            count, self._taps = self._taps, 0
+            self._fire(count)
 
-        return event
-
-    def _fire(self, count):
-        callback = self._callbacks.get(count)
-        if callback:
-            logger.debug(f"Button event: {count} click(s), firing callback")
-            try:
-                callback()
-            except Exception as e:
-                logger.error(
-                    f"Button callback for {count} click(s) raised an error: {e}"
-                )
-        else:
-            logger.debug(f"Button event: {count} click(s), no callback registered")
+    def _fire(self, key):
+        callback = self._callbacks.get(key)
+        if not callback:
+            logger.debug(f"No callback for gesture {key}")
+            return
+        logger.info(f"Gesture: {key}")
+        try:
+            callback()
+        except Exception:
+            logger.exception(f"Callback for gesture {key} failed")
 
     def _run(self):
-        logger.info("Button handler thread started")
         while not self._stop_event.is_set():
+            if not self._socket and not self._connect():
+                self._stop_event.wait(3.0)
+                continue
             try:
-                event = self._get_button_event()
-                now = time.time()
-
-                if event:
-                    logger.debug(f"Button event received: '{event}'")
-
-                    # Check for button press events
-                    if event == "single":
-                        self.click_count += 1
-                        self.last_click_time = now
-                        logger.debug(f"Click detected, count now: {self.click_count}")
-
-                    # Check if we've timed out waiting for more clicks
-                    if (
-                        self.click_count > 0
-                        and (now - self.last_click_time) > self.click_timeout
-                    ):
-                        count = self.click_count
-                        self.click_count = 0
-                        logger.info(f"Firing callback for {count} click(s)")
-                        self._fire(count)
-
-            except Exception as e:
-                logger.error(f"Unexpected error in button handler loop: {e}")
+                for event in self._read_events():
+                    self.feed(event)
+            except (OSError, ConnectionError) as e:
+                logger.warning(f"Button connection lost: {e}")
                 self._disconnect()
-
-            time.sleep(0.05)
-
-        # Cleanup on exit
+            self.poll()
         self._disconnect()
-        logger.info("Button handler thread stopped")
 
     def start(self):
         if self._thread and self._thread.is_alive():
-            logger.warning("Button handler already running")
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="ButtonHandler"
-        )
+        self._thread = threading.Thread(target=self._run, daemon=True, name="Button")
         self._thread.start()
-        logger.info("Button handler started")
 
     def stop(self):
-        logger.info("Stopping button handler...")
         self._stop_event.set()
-        self._disconnect()
         if self._thread:
             self._thread.join(timeout=3)
-        logger.info("Button handler stopped")

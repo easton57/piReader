@@ -1,70 +1,123 @@
-import os
+"""Reflowed text reader: word-wraps text to the panel and paginates it."""
 
-from PIL import Image, ImageDraw, ImageFont
+import logging
+import time
 
-try:
-    import urllib.request
-except ImportError:
-    urllib = None
+from PIL import Image, ImageDraw
+
+from config import (
+    DISPLAY_HEIGHT,
+    DISPLAY_WIDTH,
+    FONT_SIZE,
+    MARGIN_BOTTOM,
+    MARGIN_LEFT,
+    MARGIN_RIGHT,
+    MARGIN_TOP,
+)
+from display import load_font
+from pisugar import get_battery_percentage
+
+logger = logging.getLogger(__name__)
+
+FOOTER_HEIGHT = 11
+LINE_SPACING = 2
+
+_battery_cache = {"value": None, "time": 0.0}
+
+
+def cached_battery(max_age=60):
+    """Battery level, re-queried at most once a minute (render path must stay fast)."""
+    now = time.monotonic()
+    if _battery_cache["time"] == 0.0 or now - _battery_cache["time"] > max_age:
+        _battery_cache["value"] = get_battery_percentage()
+        _battery_cache["time"] = now
+    return _battery_cache["value"]
+
+
+def draw_footer(draw, font, left_text, right_text):
+    y = DISPLAY_HEIGHT - FOOTER_HEIGHT
+    draw.line([(0, y - 1), (DISPLAY_WIDTH, y - 1)], fill=0)
+    draw.text((MARGIN_LEFT, y), left_text, fill=0, font=font)
+    width = draw.textlength(right_text, font=font)
+    draw.text((DISPLAY_WIDTH - MARGIN_RIGHT - width, y), right_text, fill=0, font=font)
 
 
 class TextReader:
-    WIDTH = 250
-    HEIGHT = 122
-    MARGIN_TOP = 4
-    MARGIN_BOTTOM = 4
-    MARGIN_LEFT = 6
-    MARGIN_RIGHT = 6
+    WIDTH = DISPLAY_WIDTH
+    HEIGHT = DISPLAY_HEIGHT
 
-    def __init__(self, font_path=None, font_size=10):
-        self.font_path = font_path
+    def __init__(self, font_size=FONT_SIZE):
         self.font_size = font_size
-        self.text = ""
-        self.pages = []
+        self.font = load_font(font_size)
+        self.footer_font = load_font(9)
+        self.title = ""
+        self.pages = [[]]
         self.current_page = 0
-        self._load_font()
 
-    def _load_font(self):
-        if self.font_path is not None and os.path.exists(self.font_path):
-            self.font = ImageFont.truetype(self.font_path, self.font_size)
-        else:
-            self.font = ImageFont.load_default()
+        self.line_height = self.font_size + LINE_SPACING
+        usable = self.HEIGHT - MARGIN_TOP - MARGIN_BOTTOM - FOOTER_HEIGHT
+        self.lines_per_page = max(1, usable // self.line_height)
+        self.max_width = self.WIDTH - MARGIN_LEFT - MARGIN_RIGHT
 
-    def open(self, path):
-        if not path.endswith(".txt"):
-            return False
-        with open(path, "r") as f:
-            self.text = f.read()
-        self._paginate()
-        return True
+        # Monospace fonts let us wrap by character count, which is far faster
+        # than measuring every word on a Pi Zero.
+        w_i = self.font.getlength("i")
+        w_m = self.font.getlength("M")
+        self.char_width = w_i if w_i and abs(w_i - w_m) < 0.01 else None
 
-    def _paginate(self):
-        lines = self.text.split("\n")
+    def load_text(self, text, title=""):
+        self.title = title
+        self._paginate(text)
+
+    def _fits(self, s):
+        if self.char_width:
+            return len(s) * self.char_width <= self.max_width
+        return self.font.getlength(s) <= self.max_width
+
+    def _wrap(self, paragraph):
+        """Word-wrap one paragraph into display lines; hard-break overlong words."""
+        lines = []
+        current = ""
+        for word in paragraph.split():
+            candidate = word if not current else current + " " + word
+            if self._fits(candidate):
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+            while not self._fits(word):
+                cut = len(word) - 1
+                while cut > 1 and not self._fits(word[:cut]):
+                    cut -= 1
+                lines.append(word[:cut])
+                word = word[cut:]
+            current = word
+        if current:
+            lines.append(current)
+        return lines
+
+    def _paginate(self, text):
+        text = text.replace("\r\n", "\n").replace("\r", "\n").expandtabs(4)
+        lines = []
+        for paragraph in text.split("\n"):
+            if paragraph.strip():
+                lines.extend(self._wrap(paragraph))
+            elif lines and lines[-1] != "":
+                lines.append("")  # keep one blank line between paragraphs
+
         self.pages = []
-        current_lines = []
-        y = self.MARGIN_TOP
-
+        page = []
         for line in lines:
-            line_height = self.font_size + 2
-            if y + line_height > self.HEIGHT - self.MARGIN_BOTTOM - 10:
-                if current_lines:
-                    self.pages.append(current_lines)
-                    current_lines = []
-                    y = self.MARGIN_TOP
-                else:
-                    break
-            if line:
-                current_lines.append(line)
-                y += line_height
-            elif not current_lines:
-                y += line_height
-
-        if current_lines:
-            self.pages.append(current_lines)
-
+            if line == "" and not page:
+                continue  # no blank line at the top of a page
+            page.append(line)
+            if len(page) == self.lines_per_page:
+                self.pages.append(page)
+                page = []
+        if any(page):
+            self.pages.append(page)
         if not self.pages:
-            self.pages = [[]]
-
+            self.pages = [["(empty)"]]
         self.current_page = 0
 
     def next_page(self):
@@ -80,46 +133,25 @@ class TextReader:
         return False
 
     def set_page(self, n):
-        self.current_page = n
+        self.current_page = max(0, min(int(n), len(self.pages) - 1))
+
+    def get_current_page(self):
+        return self.current_page
 
     def get_total_pages(self):
         return len(self.pages)
-
-    def get_battery_percentage(self):
-        try:
-            if urllib is not None:
-                from config import BATTERY_HOST, BATTERY_PORT
-                response = urllib.request.urlopen(f"http://{BATTERY_HOST}:{BATTERY_PORT}/battery")
-                data = response.read()
-                return int(data)
-        except Exception:
-            pass
-        return 0
 
     def render(self):
         image = Image.new("L", (self.WIDTH, self.HEIGHT), 255)
         draw = ImageDraw.Draw(image)
 
-        if self.pages and self.current_page < len(self.pages):
-            lines = self.pages[self.current_page]
-            y = self.MARGIN_TOP
-            for line in lines:
-                draw.text((self.MARGIN_LEFT, y), line, fill=0, font=self.font)
-                y += self.font_size + 2
+        y = MARGIN_TOP
+        for line in self.pages[self.current_page]:
+            draw.text((MARGIN_LEFT, y), line, fill=0, font=self.font)
+            y += self.line_height
 
-        battery_text = str(self.get_battery_percentage()) + "%"
-        draw.text(
-            (self.MARGIN_LEFT, self.HEIGHT - 10), battery_text, fill=0, font=self.font
-        )
-
-        page_text = str(self.current_page + 1) + "/" + str(len(self.pages))
-        bbox = draw.textbbox((0, 0), page_text, font=self.font)
-        text_width = bbox[2] - bbox[0]
-        draw.text(
-            (self.WIDTH - text_width, self.HEIGHT - 10),
-            page_text,
-            fill=0,
-            font=self.font,
-        )
-
+        battery = cached_battery()
+        left = f"{battery}%" if battery is not None else ""
+        right = f"{self.current_page + 1}/{len(self.pages)}"
+        draw_footer(draw, self.footer_font, left, right)
         return image

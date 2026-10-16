@@ -1,3 +1,12 @@
-This is a sample test file.
-It has multiple lines.
-And more content here.
+Welcome to piReader!
+
+Controls (PiSugar button):
+1 tap: next page / move down
+2 taps: previous page / move up
+3 taps: open file or folder (in a PDF: switch between reflowed text and page images)
+Long press or 4 taps: back to the file list
+5 taps: shut down
+
+Your place in every book is saved on each page turn, and the last book you had open reopens on boot.
+
+Add books by copying them into the library folder or through the web UI on port 5000. Supported: .txt, .md, .epub and .pdf.
