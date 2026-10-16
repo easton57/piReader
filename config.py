@@ -32,8 +32,16 @@ CACHE_DIR = os.path.join(BASE_DIR, "cache")
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".epub", ".pdf"}
 PDF_DPI = 150
 
-# Button: taps are grouped if they arrive within this window (seconds).
+# Buttons. Both can be enabled at once; they drive the same gestures.
+USE_PISUGAR_BUTTON = True
+# BCM number of a push button wired pin -> GND (internal pull-up). None = off.
+BUTTON_GPIO = None
+# Taps are grouped if they arrive within this window (seconds). PiSugar already
+# delays its events, so the GPIO button gets a slightly shorter window.
 GESTURE_WINDOW = 0.6
+GPIO_GESTURE_WINDOW = 0.45
+# Hold the GPIO button this long for a long press (= back).
+GPIO_LONG_PRESS = 0.8
 
 # Show the screensaver and put the panel to sleep after this many idle seconds.
 # 0 disables it.

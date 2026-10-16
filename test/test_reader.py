@@ -54,6 +54,43 @@ def test_separate_gestures():
     assert fired == [1, 2]
 
 
+def press_sequence(h, timeline):
+    """timeline: list of (t, pressed) samples fed through the GPIO poller."""
+    state = {"down": False, "since": 0.0, "long_sent": False}
+    for t, pressed in timeline:
+        h.gpio_step(pressed, t, state)
+        h.poll(now=t)
+
+
+def taps(n, start=1.0, gap=0.25, hold=0.08):
+    seq, t = [], start
+    for _ in range(n):
+        seq += [(t, True), (t + hold, False)]
+        t += gap
+    return seq + [(t + 1.0, False)]
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 4, 5])
+def test_gpio_taps(n):
+    h, fired = make_handler()
+    press_sequence(h, taps(n))
+    assert fired == [n]
+
+
+def test_gpio_long_press_and_no_tap_on_release():
+    h, fired = make_handler()
+    press_sequence(h, [(1.0, True), (1.5, True), (1.9, True), (2.5, False), (4.0, False)])
+    assert fired == ["long"]
+
+
+def test_gpio_bounce_ignored():
+    h, fired = make_handler()
+    # Contact bounce: flickers within the debounce time count as one press.
+    press_sequence(h, [(1.0, True), (1.01, False), (1.015, True), (1.1, False), (1.105, True),
+                       (1.11, False), (3.0, False)])
+    assert fired == [1]
+
+
 # --- text reader -------------------------------------------------------------
 
 def test_wraps_long_lines_within_width():

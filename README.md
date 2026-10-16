@@ -23,7 +23,8 @@ Perfect for bookworms who love tinkering with hardware! 🐛
 | Component | What It Does |
 |----------|-------------|
 | **Raspberry Pi Zero W** | The brain, with built-in WiFi for the web UI |
-| **PiSugar 2** | Battery, plus the one button used for all input |
+| **PiSugar 2** | Battery (its button works as input too) |
+| **Push button** (optional) | Wired GPIO → GND; set `BUTTON_GPIO` in `config.py` |
 | **Waveshare 2.13" e-Paper (B) V4** | 250×122 black/white/red panel (red isn't used) |
 
 > ⚠️ The (B) tri-colour panel only supports full refreshes, which take ~15 s each.
@@ -61,7 +62,10 @@ BUSY    → Pin 18 (GPIO24)
 
 ---
 
-## 🎮 Controls (PiSugar button)
+## 🎮 Controls
+
+Same gestures on the PiSugar button and the GPIO button (either or both: `USE_PISUGAR_BUTTON`,
+`BUTTON_GPIO` in `config.py`). On the GPIO button a long press is ≥0.8 s.
 
 | Gesture | In the file list | While reading |
 |--------|-------------|-------------|
