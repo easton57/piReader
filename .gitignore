@@ -6,3 +6,5 @@ debug_output.png
 test/images/
 library/*
 !library/sample.txt
+webdav.json
+webdav.json.tmp

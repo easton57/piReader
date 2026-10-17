@@ -3,7 +3,7 @@ import logging
 import os
 from typing import List, Optional, Tuple
 
-from config import SUPPORTED_EXTENSIONS
+from config import CLOUD_LABEL, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +13,14 @@ PARENT = ".."  # pseudo-entry at the top of every subfolder
 class FileBrowser:
     """Directory navigation plus per-book reading progress."""
 
-    def __init__(self, root_path: str, state_file: str):
+    def __init__(self, root_path: str, state_file: str, cloud=None):
         self.root_path = os.path.abspath(root_path)
         self.state_file = state_file
+        self.cloud = cloud  # optional CloudSource
         self.current_path = self.root_path
         self.items: List[Tuple[str, bool]] = []
+        self.remote_only = set()  # names in the current cloud folder not downloaded yet
+        self.cloud_offline = False
         self.cursor_position = 0
         self._listing_signature = None
         os.makedirs(self.root_path, exist_ok=True)
@@ -77,7 +80,10 @@ class FileBrowser:
 
     # --- listing ------------------------------------------------------------
 
-    def _scan(self) -> List[Tuple[str, bool]]:
+    def in_cloud(self) -> bool:
+        return self.cloud is not None and self.cloud.contains(self.current_path)
+
+    def _scan(self, force_remote: bool = False) -> List[Tuple[str, bool]]:
         try:
             entries = os.listdir(self.current_path)
         except OSError as e:
@@ -92,12 +98,28 @@ class FileBrowser:
                 dirs.append((entry, True))
             elif os.path.splitext(entry)[1].lower() in SUPPORTED_EXTENSIONS:
                 files.append((entry, False))
-        key = lambda item: item[0].lower()
-        parent = [(PARENT, True)] if self.current_path != self.root_path else []
-        return parent + sorted(dirs, key=key) + sorted(files, key=key)
+        remote_only = set()
+        if self.in_cloud():
+            remote = self.cloud.remote_entries(self.current_path, force=force_remote)
+            self.cloud_offline = remote is None
+            local = {name for name, _ in dirs + files}
+            for name, is_dir in remote or []:
+                if name not in local:
+                    (dirs if is_dir else files).append((name, is_dir))
+                    if not is_dir:
+                        remote_only.add(name)
+        self.remote_only = remote_only
 
-    def _refresh(self, keep: Optional[str] = None) -> None:
-        self.items = self._scan()
+        key = lambda item: item[0].lower()
+        top = []
+        if self.current_path != self.root_path:
+            top.append((PARENT, True))
+        elif self.cloud is not None and self.cloud.enabled():
+            top.append((CLOUD_LABEL, True))
+        return top + sorted(dirs, key=key) + sorted(files, key=key)
+
+    def _refresh(self, keep: Optional[str] = None, force_remote: bool = False) -> None:
+        self.items = self._scan(force_remote)
         self._listing_signature = tuple(self.items)
         self.cursor_position = 0
         if keep:
@@ -128,13 +150,27 @@ class FileBrowser:
     def get_selected_path(self) -> Optional[str]:
         if not self.items:
             return None
-        return os.path.join(self.current_path, self.items[self.cursor_position][0])
+        name = self.items[self.cursor_position][0]
+        if name == CLOUD_LABEL and self.current_path == self.root_path and self.cloud:
+            return self.cloud.mirror_root
+        return os.path.join(self.current_path, name)
+
+    def selected_is_dir(self) -> bool:
+        return bool(self.items) and self.items[self.cursor_position][1]
+
+    def selected_is_remote(self) -> bool:
+        """Selected item is a cloud file that hasn't been downloaded yet."""
+        return bool(self.items) and self.items[self.cursor_position][0] in self.remote_only
 
     def selected_is_parent(self) -> bool:
         return bool(self.items) and self.items[self.cursor_position][0] == PARENT
 
     def enter(self, path: str) -> None:
-        if os.path.isdir(path):
+        if self.cloud is not None and self.cloud.contains(path):
+            os.makedirs(path, exist_ok=True)  # remote folder not mirrored yet
+            self.current_path = os.path.abspath(path)
+            self._refresh(force_remote=True)
+        elif os.path.isdir(path):
             self.current_path = os.path.abspath(path)
             self._refresh()
 
@@ -142,12 +178,21 @@ class FileBrowser:
         if self.current_path == self.root_path:
             return False
         child = os.path.basename(self.current_path)
+        if self.cloud is not None and self.current_path == self.cloud.mirror_root:
+            child = CLOUD_LABEL
         self.current_path = os.path.dirname(self.current_path)
         self._refresh(keep=child)
         return True
 
     def get_current_dir(self) -> str:
         return self.current_path
+
+    def get_title(self) -> str:
+        if self.is_root():
+            return "Library"
+        if self.cloud is not None and self.current_path == self.cloud.mirror_root:
+            return "Cloud"
+        return os.path.basename(self.current_path)
 
     def is_root(self) -> bool:
         return self.current_path == self.root_path

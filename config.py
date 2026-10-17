@@ -52,6 +52,14 @@ IDLE_TIMEOUT = 300
 # Command run on the shutdown gesture (3s hold, or 5 taps without a GPIO button). Empty string = just exit the app.
 SHUTDOWN_COMMAND = "sudo -n systemctl poweroff"
 
+# WebDAV "Cloud" folder. Credentials are in this file (gitignored), set them
+# from the web UI. Downloads are kept in library/.cloud/ mirroring the server.
+WEBDAV_SETTINGS_FILE = os.path.join(BASE_DIR, "webdav.json")
+WEBDAV_TIMEOUT = 8
+CLOUD_LABEL = "[Cloud]"
+# Remote listings are re-fetched when you enter a folder, or after this long.
+CLOUD_LIST_TTL = 120
+
 PISUGAR_HOST = "127.0.0.1"
 PISUGAR_PORT = 8423
 

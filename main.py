@@ -25,6 +25,7 @@ from button import ButtonHandler
 from config import (
     BUTTON_GPIO,
     CACHE_DIR,
+    CLOUD_LABEL,
     DEBUG_MODE,
     DISPLAY_HEIGHT,
     DISPLAY_WIDTH,
@@ -39,6 +40,7 @@ from config import (
 )
 from display import EPaperDisplay, load_font
 from documents import load_text
+from cloud import CloudSource
 from file_browser import FileBrowser
 from pdf_reader import PDFReader
 from reader import TextReader, cached_battery
@@ -76,7 +78,8 @@ def local_ip():
 class Application:
     def __init__(self, mock=False):
         self.display = EPaperDisplay(mock=mock)
-        self.browser = FileBrowser(LIBRARY_PATH, STATE_FILE)
+        self.cloud = CloudSource(LIBRARY_PATH)
+        self.browser = FileBrowser(LIBRARY_PATH, STATE_FILE, cloud=self.cloud)
         self.reader = TextReader(font_size=FONT_SIZE)
         self.pdf_reader = PDFReader(cache_dir=CACHE_DIR)
         self.font = load_font(FONT_SIZE)
@@ -171,10 +174,28 @@ class Application:
                 return
             if self.browser.selected_is_parent():
                 self.browser.go_up()
-            elif os.path.isdir(path):
+            elif self.browser.selected_is_remote():
+                if self._download(path):
+                    self._open(path)
+            elif self.browser.selected_is_dir():
                 self.browser.enter(path)
             else:
                 self._open(path)
+
+    def _download(self, path):
+        """Fetch a cloud book into the local mirror. Returns True on success."""
+        from webdav import WebDAVError
+
+        name = os.path.basename(path)
+        self._show_message(f"Downloading {name}...")
+        try:
+            self.cloud.download(path)
+        except WebDAVError as e:
+            logger.error(f"Download of {name} failed: {e}")
+            self.notice = f"Download failed: {e}"
+            return False
+        self.browser.refresh_if_changed()
+        return True
 
     def _reader_action(self, action):
         doc = self._active_reader()
@@ -336,7 +357,9 @@ class Application:
         width = DISPLAY_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
 
         # Header: folder name + battery
-        folder = "Library" if self.browser.is_root() else os.path.basename(self.browser.get_current_dir())
+        folder = self.browser.get_title()
+        if self.browser.in_cloud() and self.browser.cloud_offline:
+            folder += " (offline)"
         if self.notice:
             folder, self.notice = self.notice, None
         battery = cached_battery()
@@ -362,18 +385,25 @@ class Application:
         cursor = self.browser.get_cursor_position()
         start = max(0, min(cursor - per_screen // 2, len(items) - per_screen))
         y = header_h + 2
+        remote = self.browser.remote_only
         for i in range(start, min(len(items), start + per_screen)):
             name, is_dir = items[i]
-            label = name + "/" if is_dir else name
-            if draw.textlength(label, font=self.font) > width:
-                while label and draw.textlength(label + "...", font=self.font) > width:
+            label = name + "/" if is_dir and name not in ("..", CLOUD_LABEL) else name
+            is_remote = name in remote and not is_dir
+            avail = width - 10 if is_remote else width
+            if draw.textlength(label, font=self.font) > avail:
+                while label and draw.textlength(label + "...", font=self.font) > avail:
                     label = label[:-1]
                 label += "..."
+            fg = 255 if i == cursor else 0
             if i == cursor:
                 draw.rectangle([(0, y - 1), (DISPLAY_WIDTH, y + line_h - 2)], fill=0)
-                draw.text((MARGIN_LEFT, y), label, fill=255, font=self.font)
-            else:
-                draw.text((MARGIN_LEFT, y), label, fill=0, font=self.font)
+            draw.text((MARGIN_LEFT, y), label, fill=fg, font=self.font)
+            if is_remote:  # small download arrow: not on the device yet
+                x = DISPLAY_WIDTH - MARGIN_RIGHT - 7
+                draw.line([(x + 3, y + 1), (x + 3, y + 7)], fill=fg)
+                draw.polygon([(x, y + 5), (x + 6, y + 5), (x + 3, y + 9)], fill=fg)
+                draw.line([(x, y + 10), (x + 6, y + 10)], fill=fg)
             y += line_h
         return img
 

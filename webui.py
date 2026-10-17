@@ -116,6 +116,10 @@ h1{font-size:1.5rem;color:#222}
 .status-item{display:flex;flex-direction:column}
 .status-label{font-size:0.75rem;color:#666;text-transform:uppercase;letter-spacing:0.5px}
 .status-value{font-size:1.25rem;font-weight:600}
+.cloud-form{display:flex;flex-direction:column;gap:10px}
+.cloud-form label{display:flex;flex-direction:column;font-size:0.85rem;color:#555;gap:4px}
+.cloud-form input{padding:8px;border:1px solid #ddd;border-radius:4px;font-size:0.95rem}
+.cloud-form .btn{align-self:flex-start}
 </style>
 </head>
 <body>
@@ -129,6 +133,7 @@ h1{font-size:1.5rem;color:#222}
 </header>
 {%with messages=get_flashed_messages(with_categories=true)%}{%if messages%}<div class="flash-messages">{%for category,message in messages%}<div class="flash {{category}}">{{message}}</div>{%endfor%}</div>{%endif%}{%endwith%}
 <div class="card"><h2>Status</h2><div class="status-info"><div class="status-item"><span class="status-label">Battery</span><span class="status-value">{{battery}}%</span></div><div class="status-item"><span class="status-label">Books</span><span class="status-value">{{books|length}}</span></div><div class="status-item"><span class="status-label">Running on Pi</span><span class="status-value">{{"Yes" if is_pi else "No"}}</span></div></div></div>
+<div class="card"><h2>Cloud (WebDAV)</h2><form action="{{url_for("cloud_settings")}}" method="post" class="cloud-form"><label>Folder URL<input type="url" name="url" value="{{cloud.url}}" placeholder="https://cloud.example.com/remote.php/dav/files/USER/Books"></label><label>User<input type="text" name="user" value="{{cloud.user}}" autocomplete="username"></label><label>Password / app password<input type="password" name="password" placeholder="{{"(unchanged)" if cloud.has_password else ""}}" autocomplete="new-password"></label><button type="submit" class="btn">Save &amp; test</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Shows up as [Cloud] on the reader. Books download when you open them. Leave the URL empty to turn it off. For Nextcloud, use an app password.</p></div>
 <div class="card"><h2>Screensaver</h2><div class="screensaver">{%if screensaver%}<div class="screensaver-thumb"><img src="{{url_for("screensaver_file",filename=screensaver_filename)}}" alt="Current screensaver"></div><div><p style="margin-bottom:12px">Current screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Change Screensaver</button></form></div>{%else%}<div class="empty-state" style="padding:20px;text-align:left"><p style="margin-bottom:12px">No screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Set Screensaver</button></form></div>{%endif%}</div></div>
 <div class="card"><h2>Library ({{books|length}} books)</h2>{%if books%}<ul class="file-list">{%for book in books%}<li class="file-item"><div class="file-info"><span class="file-ext {{book.extension[1:]}}">{{book.extension[1:]}}</span><span class="file-name">{{book.name}}</span><span class="file-size">{{book.size_formatted}}</span></div><form action="{{url_for("delete_file",filename=book.name)}}" method="post"><button type="submit" class="delete-btn" onclick="return confirm('Delete ' + this.dataset.name + '?')" data-name="{{book.name}}">Delete</button></form></li>{%endfor%}</ul>{%else%}<div class="empty-state"><p>No books in library</p><p style="font-size:0.85rem;margin-top:8px">Upload .txt, .md, .epub, or .pdf files below</p></div>{%endif%}</div>
 <div class="card"><h2>Upload Books</h2><form action="{{url_for("upload")}}" method="post" enctype="multipart/form-data" class="upload-form"><input type="file" name="file" multiple accept=".txt,.md,.epub,.pdf" required><button type="submit" class="btn">Upload</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Supported formats: .txt, .md, .epub, .pdf (max {{max_mb}}MB)</p></div>
@@ -157,7 +162,45 @@ def index():
         screensaver_filename=screensaver_filename,
         is_pi=IS_PI,
         max_mb=MAX_UPLOAD_MB,
+        cloud=_cloud_view(),
     )
+
+
+def _cloud_view():
+    from webdav import load_settings
+
+    s = load_settings() or {}
+    return {"url": s.get("url", ""), "user": s.get("user", ""),
+            "has_password": bool(s.get("password"))}
+
+
+@app.route("/cloud", methods=["POST"])
+def cloud_settings():
+    from config import WEBDAV_SETTINGS_FILE
+    from webdav import WebDAVClient, WebDAVError, load_settings, save_settings
+
+    url = request.form.get("url", "").strip()
+    user = request.form.get("user", "").strip()
+    password = request.form.get("password", "")
+    if not url:
+        try:
+            os.remove(WEBDAV_SETTINGS_FILE)
+        except FileNotFoundError:
+            pass
+        flash("Cloud turned off", "success")
+        return redirect(url_for("index"))
+    if not url.startswith(("http://", "https://")):
+        flash("URL must start with https:// (or http://)", "error")
+        return redirect(url_for("index"))
+    if not password:  # blank keeps the saved one
+        password = (load_settings() or {}).get("password", "")
+    save_settings(url, user, password)
+    try:
+        entries = WebDAVClient(url, user, password).list("")
+        flash(f"Saved. Connected: {len(entries)} item(s) in that folder.", "success")
+    except WebDAVError as e:
+        flash(f"Saved, but the test failed: {e}", "error")
+    return redirect(url_for("index"))
 
 
 @app.route("/upload", methods=["POST"])

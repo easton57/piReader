@@ -58,6 +58,8 @@ BUSY    → Pin 18 (GPIO24)
 - **Progress saved per book** on every page turn; the last open book reopens on boot
 - **Battery level** from pisugar-server
 - **Screensaver** after `IDLE_TIMEOUT` (default 5 min) and on shutdown
+- **Cloud folder (WebDAV)**: browse a Nextcloud/WebDAV folder from the reader; a book downloads
+  when you open it (marked with ↓ until then) and is then available offline
 - **Web UI** on port 5000 for uploading/deleting books and setting the screensaver
 
 ---
@@ -110,6 +112,10 @@ sudo systemctl enable --now ereader
 service user needs passwordless sudo, which the default `pi` user has.
 
 Books go in `library/` (copy them in, or upload at `http://<pi-ip>:5000`).
+
+**Cloud:** in the web UI, set the WebDAV folder URL and credentials. For Nextcloud that's
+`https://<host>/remote.php/dav/files/<user>/<folder>` with an app password. They're stored in
+`webdav.json` (mode 600, gitignored). Downloads go to `library/.cloud/`.
 Progress, PDF caches and the screensaver live in `cache/`.
 
 ---
