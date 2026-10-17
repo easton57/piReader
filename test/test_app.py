@@ -28,7 +28,7 @@ def act(app, *actions):
 
 def test_open_read_back_and_resume(app):
     assert app.browser.get_selected_path().endswith("Folder")
-    act(app, "next", "select")
+    act(app, "next", "long")
     assert app.mode == main.AppMode.READER
     act(app, "next", "next", "next")
     assert app.reader.get_current_page() == 3
@@ -40,22 +40,26 @@ def test_open_read_back_and_resume(app):
     app2._open(last)
     assert app2.reader.get_current_page() == 3
 
-    act(app, "back")
+    act(app, "long")
     assert app.mode == main.AppMode.BROWSER
     assert app.browser.get_selected_path().endswith("book.txt")
     assert main.Application(mock=True).browser.get_last_open() is None
 
 
 def test_enter_folder_and_back(app):
-    act(app, "select")
+    act(app, "triple")  # 3 taps also opens
     assert app.browser.get_current_dir().endswith("Folder")
-    act(app, "back")
+    assert app.browser.selected_is_parent()
+    act(app, "long")  # ".." goes up
     assert app.browser.is_root()
+    assert app.browser.get_selected_path().endswith("Folder")
 
 
 def test_unchanged_state_skips_refresh(app):
+    act(app, "triple")  # opens Folder
+    act(app, "long")   # back up
     count = app.display.show_count
-    act(app, "back")  # at root: nothing to do
+    act(app, "prev", "next")  # net no movement
     assert app.display.show_count == count
     act(app, "next")
     assert app.display.show_count == count + 1
@@ -67,7 +71,7 @@ def test_bad_file_shows_notice(app):
     app.browser.refresh()
     while not app.browser.get_selected_path().endswith("broken.epub"):
         app.browser.move_down()
-    act(app, "select")
+    act(app, "long")
     assert app.mode == main.AppMode.BROWSER
 
 

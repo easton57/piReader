@@ -13,7 +13,7 @@ from reader import TextReader
 def make_handler():
     h = ButtonHandler(gesture_window=0.5)
     fired = []
-    for key in (1, 2, 3, 4, 5, "long"):
+    for key in (1, 2, 3, 4, 5, "long", "hold"):
         h.on_click(key)(lambda k=key: fired.append(k))
     return h, fired
 
@@ -56,7 +56,7 @@ def test_separate_gestures():
 
 def press_sequence(h, timeline):
     """timeline: list of (t, pressed) samples fed through the GPIO poller."""
-    state = {"down": False, "since": 0.0, "long_sent": False}
+    state = h.__dict__.setdefault("_test_state", {"down": False, "since": 0.0, "long_sent": False})
     for t, pressed in timeline:
         h.gpio_step(pressed, t, state)
         h.poll(now=t)
@@ -77,10 +77,18 @@ def test_gpio_taps(n):
     assert fired == [n]
 
 
-def test_gpio_long_press_and_no_tap_on_release():
+def test_gpio_long_press_fires_on_release():
     h, fired = make_handler()
-    press_sequence(h, [(1.0, True), (1.5, True), (1.9, True), (2.5, False), (4.0, False)])
+    press_sequence(h, [(1.0, True), (1.5, True), (1.9, True)])
+    assert fired == []  # still held: nothing yet
+    press_sequence(h, [(2.5, False), (4.0, False)])
     assert fired == ["long"]
+
+
+def test_gpio_hold_is_shutdown_without_long():
+    h, fired = make_handler()
+    press_sequence(h, [(1.0, True), (2.0, True), (3.0, True), (4.1, True), (5.0, False), (7.0, False)])
+    assert fired == ["hold"]
 
 
 def test_gpio_bounce_ignored():
@@ -210,7 +218,8 @@ def test_browser_dirs_first_and_navigation(tmp_path):
     assert fb.get_items_for_display() == [("Sub", True), ("a.epub", False), ("b.txt", False)]
 
     fb.enter(fb.get_selected_path())
-    assert fb.get_items_for_display() == [("inner.txt", False)]
+    assert fb.get_items_for_display() == [("..", True), ("inner.txt", False)]
+    assert fb.selected_is_parent()
     assert fb.go_up() and fb.get_selected_path().endswith("Sub")
     assert not fb.go_up()  # already at root
 

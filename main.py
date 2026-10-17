@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw
 
 from button import ButtonHandler
 from config import (
+    BUTTON_GPIO,
     CACHE_DIR,
     DEBUG_MODE,
     DISPLAY_HEIGHT,
@@ -47,8 +48,14 @@ logger = logging.getLogger(__name__)
 STATE_FILE = os.path.join(CACHE_DIR, "state.json")
 SCREENSAVER_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
 
-# Gesture -> action. Long press and 4 taps both mean "back".
-GESTURES = {1: "next", 2: "prev", 3: "select", 4: "back", "long": "back", 5: "shutdown"}
+# Gesture -> action. What "long" and "triple" do depends on the mode:
+#   file list: long press / 3 taps = open (".." goes up a folder)
+#   reading:   long press = back to list, 3 taps = PDF text/image toggle
+# Shutdown is a >=3s hold on the GPIO button. The PiSugar button can't report
+# hold length, so without a GPIO button 5 taps shuts down instead.
+GESTURES = {1: "next", 2: "prev", 3: "triple", "long": "long", "hold": "shutdown"}
+if BUTTON_GPIO is None:
+    GESTURES[5] = "shutdown"
 
 
 class AppMode(Enum):
@@ -158,13 +165,13 @@ class Application:
             self.browser.move_down()
         elif action == "prev":
             self.browser.move_up()
-        elif action == "back":
-            self.browser.go_up()
-        elif action == "select":
+        elif action in ("long", "triple"):
             path = self.browser.get_selected_path()
             if not path:
                 return
-            if os.path.isdir(path):
+            if self.browser.selected_is_parent():
+                self.browser.go_up()
+            elif os.path.isdir(path):
                 self.browser.enter(path)
             else:
                 self._open(path)
@@ -175,10 +182,10 @@ class Application:
             doc.next_page()
         elif action == "prev":
             doc.prev_page()
-        elif action == "select" and self.current_file.lower().endswith(".pdf"):
+        elif action == "triple" and self.current_file.lower().endswith(".pdf"):
             self._toggle_pdf_mode()
             return
-        elif action == "back":
+        elif action == "long":
             self._save_progress()
             self.browser.set_last_open(None)
             self.browser.reveal(self.current_file)
@@ -372,11 +379,11 @@ class Application:
 
 
 def stdin_gestures(app):
-    """--mock helper: type 1-5 (taps) or l (long press) and Enter."""
-    print("Mock input: 1=next 2=prev 3=select 4/l=back 5=shutdown", flush=True)
+    """--mock helper: type 1-3 (taps), l (long press) or h (3s hold) and Enter."""
+    print("Mock input: 1=next 2=prev 3=triple l=long h=hold(shutdown)", flush=True)
     for line in sys.stdin:
         key = line.strip().lower()
-        gesture = "long" if key == "l" else int(key) if key.isdigit() else None
+        gesture = {"l": "long", "h": "hold"}.get(key, int(key) if key.isdigit() else None)
         if gesture in GESTURES:
             app.actions.put(GESTURES[gesture])
 

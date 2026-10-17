@@ -40,14 +40,16 @@ BUTTON_GPIO = None
 # delays its events, so the GPIO button gets a slightly shorter window.
 GESTURE_WINDOW = 0.6
 GPIO_GESTURE_WINDOW = 0.45
-# Hold the GPIO button this long for a long press (= back).
+# GPIO button: release after >= GPIO_LONG_PRESS = long press (open / back);
+# keep holding to SHUTDOWN_HOLD = shut down.
 GPIO_LONG_PRESS = 0.8
+SHUTDOWN_HOLD = 3.0
 
 # Show the screensaver and put the panel to sleep after this many idle seconds.
 # 0 disables it.
 IDLE_TIMEOUT = 300
 
-# Command run on the 5-tap shutdown gesture. Empty string = just exit the app.
+# Command run on the shutdown gesture (3s hold, or 5 taps without a GPIO button). Empty string = just exit the app.
 SHUTDOWN_COMMAND = "sudo -n systemctl poweroff"
 
 PISUGAR_HOST = "127.0.0.1"

@@ -1,8 +1,8 @@
 """Button input: PiSugar button and/or a GPIO push button.
 
 Both sources feed the same gesture logic: taps are summed and the gesture
-fires once no further tap has arrived for the window; a long press fires
-immediately. That gives 1..5 tap gestures plus long-press.
+fires once no further tap has arrived for the window; long press and hold
+fire immediately. Gesture keys: 1..5 (taps), "long", "hold".
 
 PiSugar: pisugar-server pushes "single", "double" and "long" lines to every
 connected TCP client. It already waits for a possible second tap before
@@ -27,6 +27,7 @@ from config import (
     GPIO_GESTURE_WINDOW,
     GPIO_LONG_PRESS,
     PISUGAR_HOST,
+    SHUTDOWN_HOLD,
     PISUGAR_PORT,
     USE_PISUGAR_BUTTON,
 )
@@ -66,20 +67,20 @@ class ButtonHandler:
     # --- gesture logic (shared by both sources) ----------------------------
 
     def feed(self, event, now=None, window=None):
-        """Process one raw event ("single", "double", "long")."""
+        """Process one raw event ("single", "double", "long", "hold")."""
         now = time.monotonic() if now is None else now
         logger.debug(f"Button event: {event!r}")
-        fire_long = False
+        fire_now = None
         with self._lock:
-            if event == "long":
+            if event in ("long", "hold"):
                 self._taps = 0
-                fire_long = True
+                fire_now = event
             elif event in TAP_VALUES:
                 self._taps += TAP_VALUES[event]
                 self._last_tap = now
                 self._window = window or self.gesture_window
-        if fire_long:
-            self._fire("long")
+        if fire_now:
+            self._fire(fire_now)
 
     def poll(self, now=None):
         """Fire the pending tap gesture once its window has passed."""
@@ -155,18 +156,25 @@ class ButtonHandler:
     def gpio_step(self, pressed, now, state):
         """One poll of the GPIO button. Public so tests can drive it.
 
+        Short press -> tap on release. Released after GPIO_LONG_PRESS -> "long"
+        on release. Still held at SHUTDOWN_HOLD -> "hold" right away (no long).
+
         state: dict carrying {"down": bool, "since": t, "long_sent": bool}.
         """
         if pressed != state["down"]:
             if now - state["since"] < DEBOUNCE:
                 return
+            held = now - state["since"]
             state["down"], state["since"] = pressed, now
             if not pressed and not state["long_sent"]:
-                self.feed("single", now=now, window=GPIO_GESTURE_WINDOW)
+                if held >= GPIO_LONG_PRESS:
+                    self.feed("long", now=now)
+                else:
+                    self.feed("single", now=now, window=GPIO_GESTURE_WINDOW)
             state["long_sent"] = False
-        elif pressed and not state["long_sent"] and now - state["since"] >= GPIO_LONG_PRESS:
+        elif pressed and not state["long_sent"] and now - state["since"] >= SHUTDOWN_HOLD:
             state["long_sent"] = True
-            self.feed("long", now=now)
+            self.feed("hold", now=now)
 
     def _run_gpio(self):
         try:

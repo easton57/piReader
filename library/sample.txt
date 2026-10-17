@@ -1,11 +1,12 @@
 Welcome to piReader!
 
-Controls (PiSugar button):
+Controls:
 1 tap: next page / move down
 2 taps: previous page / move up
-3 taps: open file or folder (in a PDF: switch between reflowed text and page images)
-Long press or 4 taps: back to the file list
-5 taps: shut down
+Long press: open the selected file or folder; while reading, back to the list
+3 taps: also opens; in a PDF, switches between reflowed text and page images
+".." at the top of a folder goes up one level
+Hold 3 seconds (GPIO button): shut down. PiSugar-only setups: 5 taps.
 
 Your place in every book is saved on each page turn, and the last book you had open reopens on boot.
 

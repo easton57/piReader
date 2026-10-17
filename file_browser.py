@@ -7,6 +7,8 @@ from config import SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
+PARENT = ".."  # pseudo-entry at the top of every subfolder
+
 
 class FileBrowser:
     """Directory navigation plus per-book reading progress."""
@@ -91,7 +93,8 @@ class FileBrowser:
             elif os.path.splitext(entry)[1].lower() in SUPPORTED_EXTENSIONS:
                 files.append((entry, False))
         key = lambda item: item[0].lower()
-        return sorted(dirs, key=key) + sorted(files, key=key)
+        parent = [(PARENT, True)] if self.current_path != self.root_path else []
+        return parent + sorted(dirs, key=key) + sorted(files, key=key)
 
     def _refresh(self, keep: Optional[str] = None) -> None:
         self.items = self._scan()
@@ -126,6 +129,9 @@ class FileBrowser:
         if not self.items:
             return None
         return os.path.join(self.current_path, self.items[self.cursor_position][0])
+
+    def selected_is_parent(self) -> bool:
+        return bool(self.items) and self.items[self.cursor_position][0] == PARENT
 
     def enter(self, path: str) -> None:
         if os.path.isdir(path):

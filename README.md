@@ -65,15 +65,18 @@ BUSY    → Pin 18 (GPIO24)
 ## 🎮 Controls
 
 Same gestures on the PiSugar button and the GPIO button (either or both: `USE_PISUGAR_BUTTON`,
-`BUTTON_GPIO` in `config.py`). On the GPIO button a long press is ≥0.8 s.
-
+`BUTTON_GPIO` in `config.py`). 
 | Gesture | In the file list | While reading |
 |--------|-------------|-------------|
 | 1 tap | Move down | Next page |
 | 2 taps | Move up | Previous page |
-| 3 taps | Open file / folder | PDF: toggle text ↔ page image |
-| Long press (or 4 taps) | Parent folder | Back to file list |
-| 5 taps | Shut down | Shut down |
+| Long press (≥0.8 s, release) | Open file / folder (`..` = up a folder) | Back to file list |
+| 3 taps | Open (same as long press) | PDF: toggle text ↔ page image |
+| Hold 3 s | Shut down | Shut down |
+
+The PiSugar button can't report how long it was held, so with no GPIO button configured
+shutdown is 5 taps instead. Depending on your PiSugar settings its own long press may cut power,
+so prefer 3 taps over long press on that button.
 
 When the screensaver is up, the first gesture just brings the page back.
 
