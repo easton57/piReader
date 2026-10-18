@@ -77,9 +77,10 @@ Same gestures on the PiSugar button and the GPIO button (either or both: `USE_PI
 | 3 taps | Open (same as long press) | PDF: toggle text ↔ page image |
 | Hold 3 s | Shut down | Shut down |
 
-The PiSugar button can't report how long it was held, so with no GPIO button configured
-shutdown is 5 taps instead. Depending on your PiSugar settings its own long press may cut power,
-so prefer 3 taps over long press on that button.
+The PiSugar button works too, but pisugar-server only reports single, double and long press,
+so on that button you get next / previous / long press only. 3 taps (PDF toggle) and the 3 s
+shutdown hold are GPIO-button only. Depending on your PiSugar settings its long press may also
+cut power.
 
 When the screensaver is up, the first gesture just brings the page back.
 

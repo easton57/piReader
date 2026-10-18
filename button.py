@@ -1,12 +1,11 @@
 """Button input: PiSugar button and/or a GPIO push button.
 
-Both sources feed the same gesture logic: taps are summed and the gesture
-fires once no further tap has arrived for the window; long press and hold
-fire immediately. Gesture keys: 1..5 (taps), "long", "hold".
+GPIO taps are summed and the gesture fires once no further tap has arrived
+for the window; long press and hold fire immediately. Gesture keys: 1..5 (taps), "long", "hold".
 
 PiSugar: pisugar-server pushes "single", "double" and "long" lines to every
-connected TCP client. It already waits for a possible second tap before
-sending "single", so "double" just counts as 2.
+connected TCP client; they map directly to 1 tap, 2 taps and long press
+(no 3+ taps or hold on that button).
 
 GPIO: a button between BUTTON_GPIO and GND (internal pull-up, active low).
 The pin is polled rather than using edge interrupts, because RPi.GPIO's
@@ -35,6 +34,10 @@ from config import (
 logger = logging.getLogger(__name__)
 
 TAP_VALUES = {"single": 1, "double": 2}
+# pisugar-server resolves taps itself (and delays "single" while waiting for a
+# possible second tap), so its events map straight to gestures. Summing them
+# into 3+ taps is unreliable: that delay often outlasts any sane window.
+PISUGAR_GESTURES = {"single": 1, "double": 2, "long": "long"}
 DEBOUNCE = 0.03
 POLL_INTERVAL = 0.01
 
@@ -81,6 +84,14 @@ class ButtonHandler:
                 self._window = window or self.gesture_window
         if fire_now:
             self._fire(fire_now)
+
+    def feed_pisugar(self, event):
+        """PiSugar event -> gesture, immediately. Doesn't mix with GPIO taps."""
+        gesture = PISUGAR_GESTURES.get(event)
+        if gesture is None:
+            logger.debug(f"Ignoring PiSugar event {event!r}")
+            return
+        self._fire(gesture)
 
     def poll(self, now=None):
         """Fire the pending tap gesture once its window has passed."""
@@ -145,7 +156,7 @@ class ButtonHandler:
                 continue
             try:
                 for event in self._read_events():
-                    self.feed(event)
+                    self.feed_pisugar(event)
             except (OSError, ConnectionError) as e:
                 logger.warning(f"Button connection lost: {e}")
                 self._disconnect()

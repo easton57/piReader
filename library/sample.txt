@@ -6,7 +6,8 @@ Controls:
 Long press: open the selected file or folder; while reading, back to the list
 3 taps: also opens; in a PDF, switches between reflowed text and page images
 ".." at the top of a folder goes up one level
-Hold 3 seconds (GPIO button): shut down. PiSugar-only setups: 5 taps.
+Hold 3 seconds: shut down.
+The PiSugar button only does 1 tap, 2 taps and long press.
 
 Your place in every book is saved on each page turn, and the last book you had open reopens on boot.
 

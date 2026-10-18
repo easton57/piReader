@@ -37,6 +37,13 @@ def test_tap_gestures(events, expected):
     assert fired == [expected]
 
 
+def test_pisugar_events_map_directly():
+    h, fired = make_handler()
+    for e in ("single", "double", "single", "long", "custom"):
+        h.feed_pisugar(e)
+    assert fired == [1, 2, 1, "long"]  # no summing, no delay
+
+
 def test_long_press_fires_immediately_and_cancels_taps():
     h, fired = make_handler()
     h.feed("single", now=0)

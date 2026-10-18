@@ -23,7 +23,6 @@ from PIL import Image, ImageDraw
 
 from button import ButtonHandler
 from config import (
-    BUTTON_GPIO,
     CACHE_DIR,
     CLOUD_LABEL,
     DEBUG_MODE,
@@ -54,11 +53,9 @@ SCREENSAVER_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
 # Gesture -> action. What "long" and "triple" do depends on the mode:
 #   file list: long press / 3 taps = open (".." goes up a folder)
 #   reading:   long press = back to list, 3 taps = PDF text/image toggle
-# Shutdown is a >=3s hold on the GPIO button. The PiSugar button can't report
-# hold length, so without a GPIO button 5 taps shuts down instead.
+# Shutdown is a >=3s hold on the GPIO button. The PiSugar button only gives
+# 1 tap, 2 taps and long press (no triple, no shutdown).
 GESTURES = {1: "next", 2: "prev", 3: "triple", "long": "long", "hold": "shutdown"}
-if BUTTON_GPIO is None:
-    GESTURES[5] = "shutdown"
 
 
 class AppMode(Enum):
