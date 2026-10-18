@@ -24,7 +24,7 @@ Perfect for bookworms who love tinkering with hardware! 🐛
 |----------|-------------|
 | **Raspberry Pi Zero W** | The brain, with built-in WiFi for the web UI |
 | **PiSugar 2** | Battery (its button works as input too) |
-| **Push button** (optional) | Wired GPIO → GND; set `BUTTON_GPIO` in `config.py` |
+| **Push button** | BCM GPIO20 (physical pin 38) → GND (pin 39); `BUTTON_GPIO` in `config.py` |
 | **Waveshare 2.13" e-Paper (B) V4** | 250×122 black/white/red panel (red isn't used) |
 
 > ⚠️ The (B) tri-colour panel only supports full refreshes, which take ~15 s each.
