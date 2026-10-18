@@ -54,8 +54,10 @@ class FileBrowser:
         except OSError as e:
             logger.error(f"Couldn't save state: {e}")
 
-    def save_progress(self, path: str, page: int, mode: Optional[str] = None) -> None:
-        self.state["progress"][path] = {"page": page, "mode": mode}
+    def save_progress(self, path: str, page, mode: Optional[str] = None) -> None:
+        """page may be a full progress dict ({"page", "mode", "pos", ...})."""
+        entry = dict(page) if isinstance(page, dict) else {"page": page, "mode": mode}
+        self.state["progress"][path] = entry
         self.state["last_open"] = path
         self._save_state()
 

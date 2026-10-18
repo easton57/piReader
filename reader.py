@@ -1,5 +1,6 @@
 """Reflowed text reader: word-wraps text to the panel and paginates it."""
 
+import bisect
 import logging
 import time
 
@@ -14,6 +15,7 @@ from config import (
     MARGIN_RIGHT,
     MARGIN_TOP,
 )
+from book import normalize
 from display import load_font
 from pisugar import get_battery_percentage
 
@@ -51,7 +53,9 @@ class TextReader:
         self.font = load_font(font_size)
         self.footer_font = load_font(9)
         self.title = ""
+        self.book = None
         self.pages = [[]]
+        self.page_starts = [(0, 0)]
         self.current_page = 0
 
         self.line_height = self.font_size + LINE_SPACING
@@ -66,8 +70,14 @@ class TextReader:
         self.char_width = w_i if w_i and abs(w_i - w_m) < 0.01 else None
 
     def load_text(self, text, title=""):
+        from book import from_text
+
+        self.load_book(from_text(text), title)
+
+    def load_book(self, book, title=""):
         self.title = title
-        self._paginate(text)
+        self.book = book
+        self._paginate()
 
     def _fits(self, s):
         if self.char_width:
@@ -76,49 +86,83 @@ class TextReader:
 
     def _wrap(self, paragraph):
         """Word-wrap one paragraph into display lines; hard-break overlong words."""
+        return [line for line, _ in self._wrap_with_offsets(normalize(paragraph))]
+
+    def _wrap_with_offsets(self, paragraph):
+        """Like _wrap, for a normalized paragraph, with each line's start offset."""
         lines = []
-        current = ""
-        for word in paragraph.split():
+        current, current_start = "", 0
+        pos = 0
+        for word in paragraph.split(" "):
+            word_start = pos
+            pos += len(word) + 1
+            if not word:
+                continue
             candidate = word if not current else current + " " + word
             if self._fits(candidate):
+                if not current:
+                    current_start = word_start
                 current = candidate
                 continue
             if current:
-                lines.append(current)
+                lines.append((current, current_start))
             while not self._fits(word):
                 cut = len(word) - 1
                 while cut > 1 and not self._fits(word[:cut]):
                     cut -= 1
-                lines.append(word[:cut])
-                word = word[cut:]
-            current = word
+                lines.append((word[:cut], word_start))
+                word, word_start = word[cut:], word_start + cut
+            current, current_start = word, word_start
         if current:
-            lines.append(current)
+            lines.append((current, current_start))
         return lines
 
-    def _paginate(self, text):
-        text = text.replace("\r\n", "\n").replace("\r", "\n").expandtabs(4)
-        lines = []
-        for paragraph in text.split("\n"):
-            if paragraph.strip():
-                lines.extend(self._wrap(paragraph))
-            elif lines and lines[-1] != "":
-                lines.append("")  # keep one blank line between paragraphs
-
+    def _paginate(self):
         self.pages = []
-        page = []
-        for line in lines:
-            if line == "" and not page:
-                continue  # no blank line at the top of a page
-            page.append(line)
-            if len(page) == self.lines_per_page:
+        self.page_starts = []  # (chapter, offset) of the first line of each page
+        page, page_start = [], None
+
+        def finish():
+            nonlocal page, page_start
+            while page and page[-1] == "":
+                page.pop()
+            if page:
                 self.pages.append(page)
-                page = []
-        if any(page):
-            self.pages.append(page)
+                self.page_starts.append(page_start)
+            page, page_start = [], None
+
+        for ci, chapter in enumerate(self.book.chapters):
+            finish()  # every chapter starts on a fresh page
+            for para, pstart in zip(chapter.paragraphs, chapter.starts):
+                lines = self._wrap_with_offsets(para) if para else [("", 0)]
+                for text, rel in lines:
+                    if text == "" and not page:
+                        continue  # no blank line at the top of a page
+                    if page_start is None:
+                        page_start = (ci, pstart + rel)
+                    page.append(text)
+                    if len(page) == self.lines_per_page:
+                        finish()
+        finish()
         if not self.pages:
             self.pages = [["(empty)"]]
+            self.page_starts = [(0, 0)]
         self.current_page = 0
+
+    # --- positions ----------------------------------------------------------
+
+    def get_position(self):
+        """(chapter, offset) of the top of the current page."""
+        return self.page_starts[self.current_page]
+
+    def set_position(self, pos):
+        """Go to the page containing pos."""
+        pos = self.book.clamp(pos)
+        i = bisect.bisect_right(self.page_starts, pos) - 1
+        self.current_page = max(0, min(i, len(self.pages) - 1))
+
+    def get_percentage(self):
+        return self.book.percentage(self.get_position())
 
     def next_page(self):
         if self.current_page < len(self.pages) - 1:

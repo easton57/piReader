@@ -60,6 +60,13 @@ CLOUD_LABEL = "[Cloud]"
 # Remote listings are re-fetched when you enter a folder, or after this long.
 CLOUD_LIST_TTL = 120
 
+# KOReader progress sync (works with Koodo Reader's "sync with KOReader").
+# Credentials in this file (gitignored), set from the web UI.
+KOSYNC_SETTINGS_FILE = os.path.join(BASE_DIR, "kosync.json")
+KOSYNC_TIMEOUT = 5
+# Push this many seconds after the last page turn (and always when leaving a book).
+KOSYNC_PUSH_DELAY = 20
+
 PISUGAR_HOST = "127.0.0.1"
 PISUGAR_PORT = 8423
 

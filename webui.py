@@ -134,6 +134,7 @@ h1{font-size:1.5rem;color:#222}
 {%with messages=get_flashed_messages(with_categories=true)%}{%if messages%}<div class="flash-messages">{%for category,message in messages%}<div class="flash {{category}}">{{message}}</div>{%endfor%}</div>{%endif%}{%endwith%}
 <div class="card"><h2>Status</h2><div class="status-info"><div class="status-item"><span class="status-label">Battery</span><span class="status-value">{{battery}}%</span></div><div class="status-item"><span class="status-label">Books</span><span class="status-value">{{books|length}}</span></div><div class="status-item"><span class="status-label">Running on Pi</span><span class="status-value">{{"Yes" if is_pi else "No"}}</span></div></div></div>
 <div class="card"><h2>Cloud (WebDAV)</h2><form action="{{url_for("cloud_settings")}}" method="post" class="cloud-form"><label>Folder URL<input type="url" name="url" value="{{cloud.url}}" placeholder="https://cloud.example.com/remote.php/dav/files/USER/Books"></label><label>User<input type="text" name="user" value="{{cloud.user}}" autocomplete="username"></label><label>Password / app password<input type="password" name="password" placeholder="{{"(unchanged)" if cloud.has_password else ""}}" autocomplete="new-password"></label><button type="submit" class="btn">Save &amp; test</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Shows up as [Cloud] on the reader. Books download when you open them. Leave the URL empty to turn it off. For Nextcloud, use an app password.</p></div>
+<div class="card"><h2>Reading progress sync (KOReader / Koodo)</h2><form action="{{url_for("kosync_settings")}}" method="post" class="cloud-form"><label>Sync server URL<input type="url" name="url" value="{{kosync.url}}" placeholder="https://sync.koreader.rocks"></label><label>User<input type="text" name="user" value="{{kosync.user}}" autocomplete="username"></label><label>Password<input type="password" name="password" placeholder="{{"(unchanged)" if kosync.configured else ""}}" autocomplete="new-password"></label><label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="register"> Create this account on the server</label><button type="submit" class="btn">Save &amp; test</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Use the same server and login in Koodo Reader under Settings &gt; "Auto sync reading progress with KOReader". EPUBs only. Leave the URL empty to turn it off.</p></div>
 <div class="card"><h2>Screensaver</h2><div class="screensaver">{%if screensaver%}<div class="screensaver-thumb"><img src="{{url_for("screensaver_file",filename=screensaver_filename)}}" alt="Current screensaver"></div><div><p style="margin-bottom:12px">Current screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Change Screensaver</button></form></div>{%else%}<div class="empty-state" style="padding:20px;text-align:left"><p style="margin-bottom:12px">No screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Set Screensaver</button></form></div>{%endif%}</div></div>
 <div class="card"><h2>Library ({{books|length}} books)</h2>{%if books%}<ul class="file-list">{%for book in books%}<li class="file-item"><div class="file-info"><span class="file-ext {{book.extension[1:]}}">{{book.extension[1:]}}</span><span class="file-name">{{book.name}}</span><span class="file-size">{{book.size_formatted}}</span></div><form action="{{url_for("delete_file",filename=book.name)}}" method="post"><button type="submit" class="delete-btn" onclick="return confirm('Delete ' + this.dataset.name + '?')" data-name="{{book.name}}">Delete</button></form></li>{%endfor%}</ul>{%else%}<div class="empty-state"><p>No books in library</p><p style="font-size:0.85rem;margin-top:8px">Upload .txt, .md, .epub, or .pdf files below</p></div>{%endif%}</div>
 <div class="card"><h2>Upload Books</h2><form action="{{url_for("upload")}}" method="post" enctype="multipart/form-data" class="upload-form"><input type="file" name="file" multiple accept=".txt,.md,.epub,.pdf" required><button type="submit" class="btn">Upload</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Supported formats: .txt, .md, .epub, .pdf (max {{max_mb}}MB)</p></div>
@@ -163,7 +164,55 @@ def index():
         is_pi=IS_PI,
         max_mb=MAX_UPLOAD_MB,
         cloud=_cloud_view(),
+        kosync=_kosync_view(),
     )
+
+
+def _kosync_view():
+    import kosync
+
+    s = kosync.load_settings() or {}
+    return {"url": s.get("url", ""), "user": s.get("user", ""), "configured": bool(s)}
+
+
+@app.route("/kosync", methods=["POST"])
+def kosync_settings():
+    import kosync
+    from config import KOSYNC_SETTINGS_FILE
+
+    url = request.form.get("url", "").strip().rstrip("/")
+    user = request.form.get("user", "").strip()
+    password = request.form.get("password", "")
+    if not url:
+        try:
+            os.remove(KOSYNC_SETTINGS_FILE)
+        except FileNotFoundError:
+            pass
+        flash("Progress sync turned off", "success")
+        return redirect(url_for("index"))
+    if not url.startswith(("http://", "https://")) or not user:
+        flash("Need a server URL (https://...) and a user", "error")
+        return redirect(url_for("index"))
+    old = kosync.load_settings() or {}
+    if password:
+        key = kosync.password_key(password)
+    elif old.get("user") == user and old.get("key"):
+        key = old["key"]  # blank keeps the saved password
+    else:
+        flash("Enter the password", "error")
+        return redirect(url_for("index"))
+    client = kosync.KoSyncClient(url, user, key)
+    try:
+        if request.form.get("register"):
+            client.register()
+            flash(f"Registered {user} on the sync server", "success")
+        client.auth()
+    except kosync.KoSyncError as e:
+        flash(f"Not saved: {e}", "error")
+        return redirect(url_for("index"))
+    kosync.save_settings(url, user, key)
+    flash("Saved. Connected to the sync server.", "success")
+    return redirect(url_for("index"))
 
 
 def _cloud_view():

@@ -38,34 +38,6 @@ def read_markdown(path):
     return text
 
 
-def read_epub(path):
-    from bs4 import BeautifulSoup
-    import ebooklib
-    from ebooklib import epub
-
-    book = epub.read_epub(path, options={"ignore_ncx": True})
-    parts = []
-    # Spine order is reading order; fall back to all documents if it's empty.
-    items = [book.get_item_with_id(idref) for idref, _ in book.spine]
-    items = [i for i in items if i is not None and i.get_type() == ebooklib.ITEM_DOCUMENT]
-    if not items:
-        items = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
-    for item in items:
-        soup = BeautifulSoup(item.get_content(), "html.parser")
-        for tag in soup(["script", "style", "head"]):
-            tag.decompose()
-        blocks = soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote"])
-        if blocks:
-            text = "\n".join(
-                b.get_text(" ", strip=True) for b in blocks if not b.find(["p", "li"])
-            )
-        else:
-            text = soup.get_text("\n", strip=True)
-        if text.strip():
-            parts.append(text)
-    return "\n\n".join(parts)
-
-
 def read_pdf_text(path, cache_dir):
     """Extract PDF text with pdfminer, cached because it's slow on a Pi Zero."""
     cache_file = os.path.join(cache_dir, f"{file_key(path)}.txt")
@@ -84,15 +56,53 @@ def read_pdf_text(path, cache_dir):
     return text
 
 
-def load_text(path, cache_dir):
-    """Return the text of a .txt/.md/.epub/.pdf file, or raise."""
+def load_book(path, cache_dir):
+    """Return a book.Book for a .txt/.md/.epub/.pdf file, or raise."""
+    import book
+
     ext = os.path.splitext(path)[1].lower()
-    if ext == ".txt":
-        return read_plain(path)
-    if ext == ".md":
-        return read_markdown(path)
     if ext == ".epub":
-        return read_epub(path)
+        return _cached_epub(path, cache_dir)
+    if ext == ".txt":
+        return book.from_text(read_plain(path))
+    if ext == ".md":
+        return book.from_text(read_markdown(path))
     if ext == ".pdf":
-        return read_pdf_text(path, cache_dir)
+        return book.from_text(read_pdf_text(path, cache_dir), kind="pdf")
     raise ValueError(f"Unsupported file type: {ext}")
+
+
+BOOK_CACHE_VERSION = 1
+
+
+def _cached_epub(path, cache_dir):
+    """Parsing a big EPUB takes seconds on a Pi Zero; keep the parsed Book."""
+    import pickle
+
+    import book
+
+    cache_file = os.path.join(cache_dir, f"{file_key(path)}.book")
+    try:
+        with open(cache_file, "rb") as f:
+            version, cached = pickle.load(f)
+        if version == BOOK_CACHE_VERSION:
+            return cached
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning(f"Ignoring bad book cache {cache_file}: {e}")
+    parsed = book.from_epub(path)
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(cache_file + ".tmp", "wb") as f:
+            pickle.dump((BOOK_CACHE_VERSION, parsed), f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(cache_file + ".tmp", cache_file)
+    except OSError as e:
+        logger.warning(f"Couldn't cache parsed book: {e}")
+    return parsed
+
+
+def load_text(path, cache_dir):
+    """Plain text of a document (paragraphs separated by newlines)."""
+    b = load_book(path, cache_dir)
+    return "\n\n".join("\n".join(c.paragraphs) for c in b.chapters if c.paragraphs)

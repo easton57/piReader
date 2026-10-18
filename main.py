@@ -39,7 +39,8 @@ from config import (
     WEBUI_PORT,
 )
 from display import EPaperDisplay, load_font
-from documents import load_text
+from documents import load_book, load_text
+from kosync import SyncWorker, partial_md5
 from cloud import CloudSource
 from file_browser import FileBrowser
 from pdf_reader import PDFReader
@@ -80,6 +81,9 @@ class Application:
         self.display = EPaperDisplay(mock=mock)
         self.cloud = CloudSource(LIBRARY_PATH)
         self.browser = FileBrowser(LIBRARY_PATH, STATE_FILE, cloud=self.cloud)
+        self.sync = SyncWorker()
+        self.doc_id = None  # KOReader document hash of the open EPUB
+        self._remote_applied = None
         self.reader = TextReader(font_size=FONT_SIZE)
         self.pdf_reader = PDFReader(cache_dir=CACHE_DIR)
         self.font = load_font(FONT_SIZE)
@@ -130,6 +134,7 @@ class Application:
         self.running = False
         self.buttons.stop()
         self._save_progress()
+        self.sync.stop(timeout=3)
         self.display.sleep()
         logger.info("Stopped")
 
@@ -199,15 +204,17 @@ class Application:
 
     def _reader_action(self, action):
         doc = self._active_reader()
-        if action == "next":
-            doc.next_page()
-        elif action == "prev":
-            doc.prev_page()
+        if action in ("next", "prev"):
+            turned = doc.next_page() if action == "next" else doc.prev_page()
+            if turned:
+                self._save_progress(moved=True)
+            return
         elif action == "triple" and self.current_file.lower().endswith(".pdf"):
             self._toggle_pdf_mode()
             return
         elif action == "long":
             self._save_progress()
+            self.sync.flush()  # send now rather than after the delay
             self.browser.set_last_open(None)
             self.browser.reveal(self.current_file)
             self.mode = AppMode.BROWSER
@@ -231,9 +238,9 @@ class Application:
         ok = False
         if mode == AppMode.READER:
             try:
-                text = load_text(path, CACHE_DIR)
-                if text.strip() or not is_pdf:
-                    self.reader.load_text(text, title=os.path.basename(path))
+                book = load_book(path, CACHE_DIR)
+                if book.total_chars > 1 or not is_pdf:
+                    self.reader.load_book(book, title=os.path.basename(path))
                     ok = True
                 else:
                     logger.info("PDF has no text layer, using page images")
@@ -253,10 +260,38 @@ class Application:
 
         self.mode = mode
         self.current_file = path
+        self.doc_id = None
         if progress.get("mode") == mode.value:
-            self._active_reader().set_page(progress.get("page", 0))
+            if mode == AppMode.READER and progress.get("pos"):
+                self.reader.set_position(progress["pos"])  # survives layout changes
+            else:
+                self._active_reader().set_page(progress.get("page", 0))
+        if mode == AppMode.READER and self.reader.book.kind == "epub":
+            self._pull_progress(path, progress)
         self._save_progress()
         return True
+
+    def _pull_progress(self, path, local):
+        """Jump to the synced position if another device read further more recently."""
+        if not self.sync.enabled():
+            return
+        try:
+            self.doc_id = local.get("doc") or partial_md5(path)
+        except OSError as e:
+            logger.error(f"Couldn't hash {path}: {e}")
+            return
+        remote = self.sync.pull(self.doc_id)
+        if not remote or remote.get("own"):
+            return
+        if remote["timestamp"] <= local.get("updated", 0):
+            return  # what we have locally is newer
+        book = self.reader.book
+        pos = book.from_xpath(remote.get("progress"))
+        if pos is None:
+            pos = book.position_from_percentage(remote["percentage"])
+        self.reader.set_position(pos)
+        self._remote_applied = remote["timestamp"]
+        logger.info(f"Synced position from {remote.get('device', '?')}: {remote['percentage']:.1%}")
 
     def _toggle_pdf_mode(self):
         if self.mode == AppMode.READER:
@@ -276,13 +311,38 @@ class Application:
             self._active_reader().set_page(saved.get("page", 0))
         self._save_progress()
 
-    def _save_progress(self):
-        if self.current_file and self.mode != AppMode.BROWSER:
-            self.browser.save_progress(
-                self.current_file,
-                self._active_reader().get_current_page(),
-                self.mode.value,
-            )
+    def _save_progress(self, moved=False):
+        """Persist the position. moved=True for user page turns: those also bump
+        the timestamp and get pushed to the sync server; merely opening a book
+        must not, or an offline open could overwrite newer progress elsewhere."""
+        if not self.current_file or self.mode == AppMode.BROWSER:
+            return
+        prev = self.browser.get_progress(self.current_file)
+        entry = {"page": self._active_reader().get_current_page(), "mode": self.mode.value}
+        epub = self.mode == AppMode.READER and self.reader.book is not None \
+            and self.reader.book.kind == "epub"
+        if self.mode == AppMode.READER:
+            entry["pos"] = list(self.reader.get_position())
+        if self.doc_id:
+            entry["doc"] = self.doc_id
+        applied = self._remote_applied
+        if moved:
+            entry["updated"] = int(time.time())
+        elif applied:
+            entry["updated"] = applied
+        elif "updated" in prev:
+            entry["updated"] = prev["updated"]
+        self._remote_applied = None
+        self.browser.save_progress(self.current_file, entry)
+        if moved and epub and self.sync.enabled():
+            if not self.doc_id:
+                try:
+                    self.doc_id = partial_md5(self.current_file)
+                except OSError:
+                    return
+            book = self.reader.book
+            pos = self.reader.get_position()
+            self.sync.push(self.doc_id, book.to_xpath(pos), book.percentage(pos))
 
     # --- idle / shutdown -------------------------------------------------
 
@@ -292,12 +352,14 @@ class Application:
         if time.monotonic() - self.last_activity >= IDLE_TIMEOUT:
             logger.info("Idle, showing screensaver")
             self.idle = True
+            self.sync.flush()
             self._show_screensaver()
             self.display.sleep()
 
     def _shutdown(self):
         logger.info("Shutting down")
         self._save_progress()
+        self.sync.flush(timeout=5)
         if not self._show_screensaver():
             self._show_message("Powered off")
         self.running = False

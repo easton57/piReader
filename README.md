@@ -60,6 +60,7 @@ BUSY    → Pin 18 (GPIO24)
 - **Screensaver** after `IDLE_TIMEOUT` (default 5 min) and on shutdown
 - **Cloud folder (WebDAV)**: browse a Nextcloud/WebDAV folder from the reader; a book downloads
   when you open it (marked with ↓ until then) and is then available offline
+- **Reading progress sync with Koodo Reader / KOReader** (EPUB) over the KOReader sync protocol
 - **Web UI** on port 5000 for uploading/deleting books and setting the screensaver
 
 ---
@@ -116,6 +117,24 @@ Books go in `library/` (copy them in, or upload at `http://<pi-ip>:5000`).
 **Cloud:** in the web UI, set the WebDAV folder URL and credentials. For Nextcloud that's
 `https://<host>/remote.php/dav/files/<user>/<folder>` with an app password. They're stored in
 `webdav.json` (mode 600, gitignored). Downloads go to `library/.cloud/`.
+
+**Progress sync (Koodo Reader / KOReader):** set a KOReader sync server in the web UI. Use the
+public `https://sync.koreader.rocks` or self-host one (e.g. kosync / korrosync in Docker); tick
+"Create this account" the first time. Put the same server and login into Koodo
+(Settings → "Auto sync reading progress with KOReader") or KOReader.
+
+- Books are matched by KOReader's partial MD5 of the file, so every device needs the *same EPUB
+  file* (downloading it from the same Nextcloud folder does that).
+- On opening an EPUB, piReader pulls the server position and jumps there if another device saved
+  it more recently. Page turns are pushed in the background 20 s after you stop (and right away
+  when you leave the book, idle out or shut down). Opening a book never pushes, so opening it
+  offline can't clobber newer progress from your phone.
+- Positions are exchanged as XPath pointers (`/body/DocFragment[7]/body/section/p[3]/text().42`)
+  plus a percentage. You'll land on the page containing that spot; layouts differ, so the top
+  of the page won't match the other app exactly.
+- Koodo syncs when you press its sync button, not continuously.
+- The Pi's clock decides "newer": it needs NTP (Wi-Fi) or the PiSugar RTC set.
+- txt/md/pdf aren't synced.
 Progress, PDF caches and the screensaver live in `cache/`.
 
 ---
