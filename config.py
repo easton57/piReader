@@ -68,6 +68,8 @@ WEBDAV_TIMEOUT = 8
 CLOUD_LABEL = "[Cloud]"
 # Also list downloaded cloud books on the home page, next to local ones.
 SHOW_CLOUD_ON_HOME = True
+# Download progress bar: redraw (partial refresh) at most this often.
+DOWNLOAD_REDRAW_SECONDS = 2
 # Remote listings are re-fetched when you enter a folder, or after this long.
 CLOUD_LIST_TTL = 120
 

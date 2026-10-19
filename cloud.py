@@ -80,13 +80,14 @@ class CloudSource:
         self.last_error = None
         return entries
 
-    def download(self, local_path):
-        """Fetch the remote counterpart of local_path into the mirror."""
+    def download(self, local_path, progress=None):
+        """Fetch the remote counterpart of local_path into the mirror.
+        progress(done, total_or_None) is called per chunk; raising aborts."""
         client = self._client_factory()
         if client is None:
             raise WebDAVError("Cloud not configured")
         logger.info(f"Downloading {self.rel(local_path)}")
-        return client.download(self.rel(local_path), local_path)
+        return client.download(self.rel(local_path), local_path, progress=progress)
 
     def downloaded_books(self, library_root):
         """Downloaded cloud books as paths relative to library_root

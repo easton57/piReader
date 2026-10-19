@@ -169,12 +169,12 @@ class WebDAVClient:
             if total is not None and done != total:
                 raise WebDAVError(f"Download incomplete ({done}/{total} bytes)")
             os.replace(part, dest)
-        except (OSError, WebDAVError) as e:
+        except Exception as e:  # incl. a progress callback aborting (cancel)
             try:
                 os.remove(part)
             except OSError:
                 pass
-            if isinstance(e, WebDAVError):
-                raise
-            raise WebDAVError(f"Download failed: {e}") from e
+            if isinstance(e, OSError):
+                raise WebDAVError(f"Download failed: {e}") from e
+            raise
         return dest

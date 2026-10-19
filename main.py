@@ -24,6 +24,7 @@ from PIL import Image
 from button import ButtonHandler
 from config import (
     BOOK_FULL_REFRESH_EVERY,
+    DOWNLOAD_REDRAW_SECONDS,
     CACHE_DIR,
     CLOUD_LABEL,
     DEBUG_MODE,
@@ -188,19 +189,88 @@ class Application:
                 self._open(path)
 
     def _download(self, path):
-        """Fetch a cloud book into the local mirror. Returns True on success."""
+        """Fetch a cloud book into the local mirror, showing a progress bar.
+        A long press cancels. Returns True on success."""
+        from documents import Cancelled
         from webdav import WebDAVError
 
         name = self.browser.label(os.path.basename(path))
-        self._show_message(f"Downloading {name}...")
-        try:
-            self.cloud.download(path)
-        except WebDAVError as e:
-            logger.error(f"Download of {name} failed: {e}")
-            self.notice = f"Download failed: {e}"
-            return False
-        self.browser.refresh_if_changed()
-        return True
+        cancel = threading.Event()
+        state = {"done": 0, "total": None}
+        result = {}
+
+        def progress(done, total):
+            state["done"], state["total"] = done, total
+            if cancel.is_set():
+                raise Cancelled()
+
+        def work():
+            try:
+                self.cloud.download(path, progress=progress)
+                result["ok"] = True
+            except Cancelled:
+                result["cancelled"] = True
+            except WebDAVError as e:
+                result["error"] = e
+
+        self._draw_progress(name, 0, None, partial=False)
+        drawn = (0, time.monotonic())
+        worker = threading.Thread(target=work, daemon=True, name="Download")
+        worker.start()
+        while worker.is_alive():
+            try:
+                action = self.actions.get(timeout=0.2)
+                if action in ("long", "shutdown"):
+                    cancel.set()
+                    if action == "shutdown":
+                        self.actions.put("shutdown")
+            except queue.Empty:
+                pass
+            # Redraw on visible progress, but not more often than the panel likes.
+            done, total = state["done"], state["total"]
+            step = done * 100 // total if total else done // (512 * 1024)
+            # (Only with partial refresh: on the tri-colour panel each redraw takes ~15 s.)
+            if (self.display.supports_partial and step != drawn[0]
+                    and time.monotonic() - drawn[1] >= DOWNLOAD_REDRAW_SECONDS):
+                self._draw_progress(name, done, total, partial=True)
+                drawn = (step, time.monotonic())
+        worker.join()
+
+        if result.get("ok"):
+            self.browser.refresh_if_changed()
+            return True
+        if result.get("cancelled"):
+            self.notice = "Download cancelled"
+        else:
+            logger.error(f"Download of {name} failed: {result.get('error')}")
+            self.notice = f"Download failed: {result.get('error')}"
+        return False
+
+    def _draw_progress(self, title, done, total, partial):
+        img = self.display.create_canvas()
+        draw = new_draw(img)
+        y = 8
+        for line in self.reader._wrap(f"Downloading {title}")[:2]:
+            draw.text((MARGIN_LEFT, y), line, fill=0, font=self.font)
+            y += FONT_SIZE + 2
+        bar_top, bar_h = 62, 14
+        left, right = MARGIN_LEFT, DISPLAY_WIDTH - MARGIN_RIGHT
+        draw.rectangle([(left, bar_top), (right, bar_top + bar_h)], outline=0)
+        mb = done / (1024 * 1024)
+        if total:
+            frac = min(1.0, done / total)
+            fill_to = left + 2 + int((right - left - 4) * frac)
+            if fill_to > left + 2:
+                draw.rectangle([(left + 2, bar_top + 2), (fill_to, bar_top + bar_h - 2)], fill=0)
+            status = f"{frac:.0%}  {mb:.1f} / {total / (1024 * 1024):.1f} MB"
+        else:
+            status = f"{mb:.1f} MB"
+        draw.text((left, bar_top + bar_h + 4), status, fill=0, font=self.small_font)
+        hint = "Long press to cancel"
+        draw.text((right - draw.textlength(hint, font=self.small_font), DISPLAY_HEIGHT - 13),
+                  hint, fill=0, font=self.small_font)
+        self.display.show(img, partial=partial, limit=1000)
+        self._last_screen = None
 
     def _reader_action(self, action):
         doc = self._active_reader()

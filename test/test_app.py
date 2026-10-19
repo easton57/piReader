@@ -176,3 +176,43 @@ def test_pdf_open_uses_pdftotext_and_can_be_cancelled(app, monkeypatch, tmp_path
     assert not app._open(pdf)
     assert time.monotonic() - t < 5
     assert app.mode == main.AppMode.BROWSER and app.notice == "Cancelled"
+
+
+def fake_download(chunks, delay):
+    def download(local_path, progress=None):
+        total = chunks * 1024 * 1024
+        for i in range(1, chunks + 1):
+            time.sleep(delay)
+            progress(i * 1024 * 1024, total)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, "w") as f:
+            f.write("downloaded text")
+    return download
+
+
+def test_download_progress_bar(app, monkeypatch):
+    monkeypatch.setattr(main, "DOWNLOAD_REDRAW_SECONDS", 0)
+    monkeypatch.setattr(app.cloud, "download", fake_download(chunks=5, delay=0.3))
+    refreshes = []
+    real_show = app.display.show
+
+    def show(img, **kw):
+        real_show(img, **kw)
+        refreshes.append(app.display.last_refresh)
+    monkeypatch.setattr(app.display, "show", show)
+
+    target = os.path.join(app.cloud.mirror_root, "big.txt")
+    assert app._download(target)
+    assert os.path.exists(target)
+    assert refreshes[0] == "full" and refreshes.count("partial") >= 3
+
+
+def test_download_cancel(app, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(app.cloud, "download", fake_download(chunks=100, delay=0.1))
+    threading.Timer(0.5, lambda: app.actions.put("long")).start()
+    t = time.monotonic()
+    assert not app._download(os.path.join(app.cloud.mirror_root, "big.txt"))
+    assert time.monotonic() - t < 3
+    assert app.notice == "Download cancelled"

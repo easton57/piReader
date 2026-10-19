@@ -250,3 +250,23 @@ def test_webui_lists_and_removes_downloads(server):
     assert not os.path.exists(book)
     assert "Nothing downloaded" in client.get("/").get_data(as_text=True)
     assert not os.path.exists(cloud.mirror_root + "/KoodoReader")
+
+
+def test_cancelled_download_leaves_no_partial_file(server, tmp_path):
+    (server["root"] / "Books" / "big.epub").write_bytes(os.urandom(2 * 1024 * 1024))
+    c = webdav.WebDAVClient(server["url"], USER, PASSWORD)
+    dest = tmp_path / "out" / "big.epub"
+    seen = []
+
+    class Stop(Exception):
+        pass
+
+    def progress(done, total):
+        seen.append((done, total))
+        if done > 256 * 1024:
+            raise Stop()
+
+    with pytest.raises(Stop):
+        c.download("big.epub", str(dest), progress=progress)
+    assert seen[0][1] == 2 * 1024 * 1024  # total known from Content-Length
+    assert not dest.exists() and not os.path.exists(str(dest) + ".part")
