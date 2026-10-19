@@ -366,3 +366,41 @@ def test_webui_kosync_card(server):
     assert b"Login failed" in r.data
     c.post("/kosync", data={"url": ""})
     assert not os.path.exists(config.KOSYNC_SETTINGS_FILE)
+
+
+def test_offline_push_survives_reboot(server, tmp_path):
+    key = kosync.password_key("pw")
+    server.users["me"] = key
+    pending = str(tmp_path / "pending.json")
+    up = {"url": "http://127.0.0.1:9"}  # nothing listens here: offline
+
+    def client():
+        return kosync.KoSyncClient(up["url"], "me", key, timeout=1)
+
+    w = kosync.SyncWorker(client, delay=0, pending_file=pending)
+    w.push("doc", "/body/DocFragment[3]/body/p[7]/text().0", 0.42)
+    time.sleep(0.5)
+    w.stop(timeout=0.5)
+    assert server.puts == []
+    assert "doc" in json.load(open(pending))
+
+    up["url"] = server.url  # "reboot" with the network back
+    w2 = kosync.SyncWorker(client, delay=0, pending_file=pending)
+    w2.flush(timeout=3)
+    assert [p["progress"] for p in server.puts] == ["/body/DocFragment[3]/body/p[7]/text().0"]
+    assert json.load(open(pending)) == {}
+
+
+def test_stale_offline_push_does_not_clobber_newer_remote(server, tmp_path):
+    key = kosync.password_key("pw")
+    server.users["me"] = key
+    read_at = int(time.time()) - 3600  # read offline an hour ago
+    server.progress[("me", "doc")] = {"document": "doc", "progress": "/body/DocFragment[9]",
+                                      "percentage": 0.9, "device": "Koodo Reader",
+                                      "device_id": "PHONE", "timestamp": int(time.time())}
+    w = kosync.SyncWorker(lambda: kosync.KoSyncClient(server.url, "me", key), delay=0,
+                          pending_file=str(tmp_path / "p.json"))
+    w.push("doc", "/body/DocFragment[3]", 0.3, read_at=read_at)
+    w.flush(timeout=3)
+    assert server.puts == []
+    assert server.progress[("me", "doc")]["device_id"] == "PHONE"

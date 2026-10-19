@@ -12,6 +12,7 @@ import posixpath
 import re
 import shutil
 import sqlite3
+import threading
 import time
 
 from config import CACHE_DIR, CLOUD_LIST_TTL, SUPPORTED_EXTENSIONS
@@ -132,24 +133,37 @@ class CloudSource:
             return None
         return self._koodo_titles(local_dir, fetch).get(m.group(1))
 
+    def _db_path(self, rel):
+        return os.path.join(
+            self.cache_dir, f"koodo-books-{hashlib.md5(rel.encode()).hexdigest()[:8]}.db")
+
+    def _fetch_titles(self, rel):
+        client = self._client_factory()
+        if client is not None:
+            try:
+                client.download_sibling(posixpath.join(rel, "..", "config", "books.db"),
+                                        self._db_path(rel))
+            except WebDAVError as e:
+                # Offline or not a Koodo folder: keep using the last copy, if any.
+                logger.info(f"No Koodo books.db for {rel or 'cloud root'}: {e}")
+        self._titles[rel] = (time.monotonic(), read_koodo_titles(self._db_path(rel)))
+
+    def refresh_titles(self, local_dir):
+        """Fetch Koodo's books.db now (blocking). Used when entering a folder,
+        behind the loading screen; elsewhere titles refresh in the background."""
+        self._fetch_titles(self.rel(local_dir))
+
     def _koodo_titles(self, local_dir, fetch=True):
         rel = self.rel(local_dir)
         cached = self._titles.get(rel)
         if cached and time.monotonic() - cached[0] < CLOUD_LIST_TTL:
             return cached[1]
-        db_path = os.path.join(
-            self.cache_dir, f"koodo-books-{hashlib.md5(rel.encode()).hexdigest()[:8]}.db")
-        if not fetch:
-            return read_koodo_titles(db_path)
-        client = self._client_factory()
-        if client is not None:
-            try:
-                client.download_sibling(posixpath.join(rel, "..", "config", "books.db"), db_path)
-            except WebDAVError as e:
-                # Offline or not a Koodo folder: fall back to the last copy, if any.
-                logger.info(f"No Koodo books.db for {rel or 'cloud root'}: {e}")
-        titles = read_koodo_titles(db_path)
-        self._titles[rel] = (time.monotonic(), titles)
+        titles = cached[1] if cached else read_koodo_titles(self._db_path(rel))
+        if fetch:
+            # Never block a screen redraw on the network: refresh in the background
+            # and use what we have (the cached copy works offline).
+            self._titles[rel] = (time.monotonic(), titles)
+            threading.Thread(target=self._fetch_titles, args=(rel,), daemon=True).start()
         return titles
 
 

@@ -3,6 +3,7 @@ import logging
 import os
 from typing import List, Optional, Tuple
 
+from cloud import KOODO_FILE
 from config import CLOUD_LABEL, SHOW_CLOUD_ON_HOME, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,9 @@ class FileBrowser:
             os.makedirs(path, exist_ok=True)  # remote folder not mirrored yet
             self.current_path = os.path.abspath(path)
             self._refresh(force_remote=True)
+            if any(KOODO_FILE.match(name) for name, _ in self.items):
+                self.cloud.refresh_titles(self.current_path)
+                self._refresh()  # re-sort by the fresh titles (listing is cached)
         elif os.path.isdir(path):
             self.current_path = os.path.abspath(path)
             self._refresh()

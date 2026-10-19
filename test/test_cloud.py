@@ -236,7 +236,7 @@ def test_webui_lists_and_removes_downloads(server):
     cloud = CloudSource(config.LIBRARY_PATH)
     book = os.path.join(cloud.mirror_root, "1779244646577.epub")
     cloud.download(book)
-    cloud.title_for(cloud.mirror_root, "1779244646577.epub")  # caches books.db like the reader does
+    cloud.refresh_titles(cloud.mirror_root)  # caches books.db like entering the folder does
 
     client = webui.app.test_client()
     page = client.get("/").get_data(as_text=True)

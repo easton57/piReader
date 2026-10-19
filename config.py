@@ -54,6 +54,9 @@ GPIO_GESTURE_WINDOW = 0.45
 GPIO_LONG_PRESS = 0.8
 SHUTDOWN_HOLD = 3.0
 
+# Show a "loading" screen when opening a book or the Cloud folder takes longer than this.
+BUSY_DELAY = 0.6
+
 # Show the screensaver and put the panel to sleep after this many idle seconds.
 # 0 disables it.
 IDLE_TIMEOUT = 300

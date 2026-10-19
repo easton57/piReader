@@ -169,11 +169,15 @@ class SyncWorker:
     last change (or immediately on flush(), e.g. when leaving a book).
     """
 
-    def __init__(self, client_factory=client_from_settings, delay=KOSYNC_PUSH_DELAY):
+    def __init__(self, client_factory=client_from_settings, delay=KOSYNC_PUSH_DELAY,
+                 pending_file=None):
         self._client_factory = client_factory
         self.delay = delay
         self.device_id = device_id()
-        self._pending = {}  # document -> (due, progress, percentage)
+        # document -> (due, progress, percentage, read_at). Persisted so progress
+        # made offline is pushed after a reboot once the network is back.
+        self._pending_file = pending_file or os.path.join(CACHE_DIR, "kosync_pending.json")
+        self._pending = self._load_pending()
         self._cond = threading.Condition()
         self._busy = False
         self._stop = False
@@ -197,17 +201,39 @@ class SyncWorker:
             remote["own"] = True  # our own last push
         return remote
 
-    def push(self, document, progress, percentage):
+    def _load_pending(self):
+        try:
+            with open(self._pending_file, encoding="utf-8") as f:
+                data = json.load(f)
+            # Retry soon after startup (give Wi-Fi a moment).
+            return {d: (time.monotonic() + 15, p, pct, at) for d, (p, pct, at) in data.items()}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _save_pending(self):
+        data = {d: [p, pct, at] for d, (_, p, pct, at) in self._pending.items()}
+        try:
+            os.makedirs(os.path.dirname(self._pending_file), exist_ok=True)
+            tmp = self._pending_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, self._pending_file)
+        except OSError as e:
+            logger.warning(f"Couldn't save pending sync: {e}")
+
+    def push(self, document, progress, percentage, read_at=None):
         if not progress:
             return
         with self._cond:
-            self._pending[document] = (time.monotonic() + self.delay, progress, percentage)
+            self._pending[document] = (time.monotonic() + self.delay, progress, percentage,
+                                       int(read_at or time.time()))
+            self._save_pending()
             self._cond.notify()
 
     def flush(self, timeout=None):
         """Send everything pending now; wait up to timeout for it to finish."""
         with self._cond:
-            self._pending = {d: (0, p, pct) for d, (_, p, pct) in self._pending.items()}
+            self._pending = {d: (0, p, pct, at) for d, (_, p, pct, at) in self._pending.items()}
             self._cond.notify()
             end = time.monotonic() + (timeout if timeout is not None else 0)
             while timeout and (self._pending or self._busy):
@@ -227,26 +253,36 @@ class SyncWorker:
             with self._cond:
                 while not self._stop:
                     now = time.monotonic()
-                    due = [d for d, (t, _, _) in self._pending.items() if t <= now]
+                    due = [d for d, (t, *_) in self._pending.items() if t <= now]
                     if due:
                         break
-                    wait = min((t for t, _, _ in self._pending.values()), default=now + 60) - now
+                    wait = min((v[0] for v in self._pending.values()), default=now + 60) - now
                     self._cond.wait(max(0.05, wait))
                 if self._stop:
                     return
                 batch = {d: self._pending.pop(d) for d in due}
                 self._busy = True
             client = self._client_factory()
-            for doc, (_, progress, pct) in batch.items():
+            for doc, (_, progress, pct, read_at) in batch.items():
                 if client is None:
                     break
                 try:
-                    client.put_progress(doc, progress, pct, self.device_id)
-                    logger.info(f"Pushed progress {pct:.1%} for {doc[:8]}")
+                    # Don't clobber newer progress another device synced while we
+                    # were offline (our push would get a newer server timestamp).
+                    remote = client.get_progress(doc)
+                    if (remote and remote.get("device_id") != self.device_id
+                            and remote["timestamp"] > read_at):
+                        logger.info(f"Skipping stale push for {doc[:8]}: "
+                                    f"{remote.get('device', 'another device')} is newer")
+                    else:
+                        client.put_progress(doc, progress, pct, self.device_id)
+                        logger.info(f"Pushed progress {pct:.1%} for {doc[:8]}")
                 except KoSyncError as e:
                     logger.warning(f"Progress push failed, will retry later: {e}")
                     with self._cond:  # keep newer local changes if any arrived meanwhile
-                        self._pending.setdefault(doc, (time.monotonic() + 60, progress, pct))
+                        self._pending.setdefault(doc, (time.monotonic() + 60, progress, pct, read_at))
+            with self._cond:
+                self._save_pending()
             with self._cond:
                 self._busy = False
                 self._cond.notify_all()

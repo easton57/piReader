@@ -9,6 +9,7 @@ Threads:
 """
 
 import argparse
+import contextlib
 import logging
 import os
 import queue
@@ -24,6 +25,7 @@ from PIL import Image
 from button import ButtonHandler
 from config import (
     BOOK_FULL_REFRESH_EVERY,
+    BUSY_DELAY,
     DOWNLOAD_REDRAW_SECONDS,
     CACHE_DIR,
     CLOUD_LABEL,
@@ -184,7 +186,11 @@ class Application:
                 if self._download(path):
                     self._open(path)
             elif self.browser.selected_is_dir():
-                self.browser.enter(path)
+                if self.cloud.contains(path):
+                    with self._busy("Loading Cloud..."):
+                        self.browser.enter(path)
+                else:
+                    self.browser.enter(path)
             else:
                 self._open(path)
 
@@ -296,8 +302,34 @@ class Application:
     def _active_reader(self):
         return self.pdf_reader if self.mode == AppMode.PDF_IMAGE else self.reader
 
+    @contextlib.contextmanager
+    def _busy(self, text):
+        """Show a loading screen if the wrapped work takes longer than
+        BUSY_DELAY seconds (quick operations don't flash the panel)."""
+        done = threading.Event()
+        shown = []
+
+        def show():
+            if not done.wait(BUSY_DELAY):
+                self._show_message(text, partial=True)
+                shown.append(True)
+
+        t = threading.Thread(target=show, daemon=True, name="Busy")
+        t.start()
+        try:
+            yield
+        finally:
+            done.set()
+            t.join()  # never let the busy screen and the next render touch SPI together
+
     def _open(self, path):
         """Open a document, restoring its saved page. Returns True on success."""
+        if path.lower().endswith(".pdf"):
+            return self._open_doc(path)  # has its own cancellable "Opening" screen
+        with self._busy(f"Opening {self.browser.label(os.path.basename(path))}..."):
+            return self._open_doc(path)
+
+    def _open_doc(self, path):
         progress = self.browser.get_progress(path)
         is_pdf = path.lower().endswith(".pdf")
         mode = AppMode.READER
@@ -453,7 +485,8 @@ class Application:
                     return
             book = self.reader.book
             pos = self.reader.get_position()
-            self.sync.push(self.doc_id, book.to_xpath(pos), book.percentage(pos))
+            self.sync.push(self.doc_id, book.to_xpath(pos), book.percentage(pos),
+                           read_at=entry["updated"])
 
     # --- idle / shutdown -------------------------------------------------
 
@@ -470,9 +503,10 @@ class Application:
     def _shutdown(self):
         logger.info("Shutting down")
         self._save_progress()
-        self.sync.flush(timeout=5)
+        # Screen first so it's obvious something is happening, then finish syncing.
         if not self._show_screensaver():
             self._show_message("Powered off")
+        self.sync.flush(timeout=5)
         self.running = False
         if SHUTDOWN_COMMAND and not self.display.mock:
             self.display.sleep()
@@ -504,7 +538,7 @@ class Application:
             logger.error(f"Failed to show screensaver: {e}")
             return False
 
-    def _show_message(self, text):
+    def _show_message(self, text, partial=False):
         img = self.display.create_canvas()
         draw = new_draw(img)
         lines = [l for part in (text or "").split("\n") for l in self.reader._wrap(part)]
@@ -513,7 +547,7 @@ class Application:
             w = draw.textlength(line, font=self.font)
             draw.text(((DISPLAY_WIDTH - w) // 2, y), line, fill=0, font=self.font)
             y += FONT_SIZE + 2
-        self.display.show(img)
+        self.display.show(img, partial=partial)
         self._last_screen = None
 
     def _render(self):

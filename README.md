@@ -139,6 +139,9 @@ public `https://sync.koreader.rocks` or self-host one (e.g. kosync / korrosync i
 - Positions are exchanged as XPath pointers (`/body/DocFragment[7]/body/section/p[3]/text().42`)
   plus a percentage. You'll land on the page containing that spot; layouts differ, so the top
   of the page won't match the other app exactly.
+- Offline: reading works normally and progress is queued (saved to disk, so it survives a
+  reboot); it's pushed once the server is reachable again, unless another device synced newer
+  progress for that book in the meantime.
 - Koodo syncs when you press its sync button, not continuously.
 - The Pi's clock decides "newer": it needs NTP (Wi-Fi) or the PiSugar RTC set.
 - txt/md/pdf aren't synced.
