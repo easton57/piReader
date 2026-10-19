@@ -216,3 +216,13 @@ def test_download_cancel(app, monkeypatch):
     assert not app._download(os.path.join(app.cloud.mirror_root, "big.txt"))
     assert time.monotonic() - t < 3
     assert app.notice == "Download cancelled"
+
+
+def test_back_from_book_in_subfolder_goes_home(app):
+    with open(os.path.join(config.LIBRARY_PATH, "Folder", "inner.txt"), "w") as f:
+        f.write("inner book")
+    act(app, "long")           # into Folder
+    act(app, "next", "long")   # past "..", open inner.txt
+    assert app.mode == main.AppMode.READER
+    act(app, "long")
+    assert app.browser.is_root()

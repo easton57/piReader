@@ -172,6 +172,13 @@ class FileBrowser:
                     return os.path.basename(name)
         return name
 
+    def go_home(self, select: Optional[str] = None) -> None:
+        """Back to the library root, with the cursor on `select` if it's listed there."""
+        self.current_path = self.root_path
+        self._refresh()
+        if select:
+            self.select_path(select)
+
     def select_path(self, path: str) -> bool:
         """Put the cursor on path if it's listed in the current folder."""
         for i, (name, _) in enumerate(self.items):

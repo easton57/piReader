@@ -140,10 +140,10 @@ def test_app_download_and_open(server, monkeypatch):
     assert app.current_file.endswith(os.path.join(".cloud", "Dune & Co.txt"))
     assert "Remote book text." in app.reader.pages[0][0]
 
-    # Progress is tracked like any local book and survives a restart.
+    # Leaving the book goes to the home screen, where the download is now listed.
     app._handle_actions(["long"])
-    assert app.browser.get_title() == "Cloud"
-    assert app.browser.get_selected_path().endswith("Dune & Co.txt")
+    assert app.browser.is_root()
+    assert app.browser.get_selected_path().endswith(os.path.join(".cloud", "Dune & Co.txt"))
 
 
 def test_webui_cloud_settings(server):
