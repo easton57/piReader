@@ -24,7 +24,7 @@ Perfect for bookworms who love tinkering with hardware! 🐛
 |----------|-------------|
 | **Raspberry Pi Zero W** | The brain, with built-in WiFi for the web UI |
 | **PiSugar 2** | Battery (its button works as input too) |
-| **Push button** | BCM GPIO20 (physical pin 38) → GND (pin 39); `BUTTON_GPIO` in `config.py` |
+| **Push button** (optional) | GPIO → GND, e.g. BCM20 (pin 38) + GND (pin 39); set `BUTTON_GPIO` in `config.py` |
 | **Waveshare 2.13" e-Paper (B) V4** | 250×122 black/white/red panel (red isn't used) |
 
 > ⚠️ The (B) tri-colour panel only supports full refreshes, which take ~15 s each.
@@ -61,7 +61,7 @@ BUSY    → Pin 18 (GPIO24)
 - **Cloud folder (WebDAV)**: browse a Nextcloud/WebDAV folder from the reader; a book downloads
   when you open it (marked with ↓ until then) and is then available offline
 - **Reading progress sync with Koodo Reader / KOReader** (EPUB) over the KOReader sync protocol
-- **Web UI** on port 5000 for uploading/deleting books and setting the screensaver
+- **Web UI** on port 5000 for uploading/deleting books, setting the screensaver, and shutting down
 
 ---
 

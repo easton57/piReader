@@ -9,9 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PIL import ImageDraw  # noqa: E402
-
-from display import EPaperDisplay, load_font  # noqa: E402
+from display import EPaperDisplay, load_font, new_draw  # noqa: E402
 
 
 def main():
@@ -20,7 +18,7 @@ def main():
         print("FAILED: display didn't initialize (SPI enabled? wiring?)")
         return 1
     canvas = display.create_canvas()
-    draw = ImageDraw.Draw(canvas)
+    draw = new_draw(canvas)
     draw.text((10, 10), "Display OK", font=load_font(20), fill=0)
     draw.text((10, 45), "Top-left should be up.", font=load_font(12), fill=0)
     draw.rectangle([(0, 0), (249, 121)], outline=0)

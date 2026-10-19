@@ -31,6 +31,10 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp"}
 
 logger = logging.getLogger(__name__)
 
+# Set by main.py so the web UI can ask the reader to do things (e.g. shut down
+# cleanly: save progress, push sync, show the screensaver, then power off).
+ACTION_QUEUE = None
+
 
 def get_battery_percentage():
     value = _battery()
@@ -137,6 +141,7 @@ h1{font-size:1.5rem;color:#222}
 <div class="card"><h2>Reading progress sync (KOReader / Koodo)</h2><form action="{{url_for("kosync_settings")}}" method="post" class="cloud-form"><label>Sync server URL<input type="url" name="url" value="{{kosync.url}}" placeholder="https://sync.koreader.rocks"></label><label>User<input type="text" name="user" value="{{kosync.user}}" autocomplete="username"></label><label>Password<input type="password" name="password" placeholder="{{"(unchanged)" if kosync.configured else ""}}" autocomplete="new-password"></label><label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="register"> Create this account on the server</label><button type="submit" class="btn">Save &amp; test</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Use the same server and login in Koodo Reader under Settings &gt; "Auto sync reading progress with KOReader". EPUBs only. Leave the URL empty to turn it off.</p></div>
 <div class="card"><h2>Screensaver</h2><div class="screensaver">{%if screensaver%}<div class="screensaver-thumb"><img src="{{url_for("screensaver_file",filename=screensaver_filename)}}" alt="Current screensaver"></div><div><p style="margin-bottom:12px">Current screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Change Screensaver</button></form></div>{%else%}<div class="empty-state" style="padding:20px;text-align:left"><p style="margin-bottom:12px">No screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Set Screensaver</button></form></div>{%endif%}</div></div>
 <div class="card"><h2>Library ({{books|length}} books)</h2>{%if books%}<ul class="file-list">{%for book in books%}<li class="file-item"><div class="file-info"><span class="file-ext {{book.extension[1:]}}">{{book.extension[1:]}}</span><span class="file-name">{{book.name}}</span><span class="file-size">{{book.size_formatted}}</span></div><form action="{{url_for("delete_file",filename=book.name)}}" method="post"><button type="submit" class="delete-btn" onclick="return confirm('Delete ' + this.dataset.name + '?')" data-name="{{book.name}}">Delete</button></form></li>{%endfor%}</ul>{%else%}<div class="empty-state"><p>No books in library</p><p style="font-size:0.85rem;margin-top:8px">Upload .txt, .md, .epub, or .pdf files below</p></div>{%endif%}</div>
+<div class="card"><h2>Power</h2><form action="{{url_for("shutdown")}}" method="post"><button type="submit" class="btn" style="background:#c62828" onclick="return confirm('Shut down the reader?')">Shut down</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Saves your place and powers off. Same as holding the GPIO button for 3 s.</p></div>
 <div class="card"><h2>Upload Books</h2><form action="{{url_for("upload")}}" method="post" enctype="multipart/form-data" class="upload-form"><input type="file" name="file" multiple accept=".txt,.md,.epub,.pdf" required><button type="submit" class="btn">Upload</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Supported formats: .txt, .md, .epub, .pdf (max {{max_mb}}MB)</p></div>
 </div>
 </body>
@@ -330,6 +335,15 @@ def delete_file(filename):
 def too_large(_):
     flash(f"File too large (max {MAX_UPLOAD_MB}MB)", "error")
     return redirect(url_for("index"))
+
+
+@app.route("/shutdown", methods=["POST"])
+def shutdown():
+    if ACTION_QUEUE is None:
+        flash("Reader app isn't running", "error")
+        return redirect(url_for("index"))
+    ACTION_QUEUE.put("shutdown")
+    return "<p style='font-family:sans-serif'>Shutting down. You can close this page.</p>"
 
 
 @app.route("/status")

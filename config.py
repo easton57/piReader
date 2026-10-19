@@ -24,7 +24,7 @@ FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ]
-FONT_SIZE = 10
+FONT_SIZE = 12  # reading text and file list; 10 fits more, 13+ gets cramped
 FILES_PER_SCREEN = 8
 
 LIBRARY_PATH = os.path.join(BASE_DIR, "library")
@@ -35,7 +35,7 @@ PDF_DPI = 150
 # Buttons. Both can be enabled at once; they drive the same gestures.
 USE_PISUGAR_BUTTON = True
 # BCM number of a push button wired pin -> GND (internal pull-up). None = off.
-BUTTON_GPIO = 20  # BCM20 = physical pin 38 (GND next to it on pin 39)
+BUTTON_GPIO = None  # e.g. 20 for BCM20 = physical pin 38 (GND on pin 39)
 # Taps are grouped if they arrive within this window (seconds). PiSugar already
 # delays its events, so the GPIO button gets a slightly shorter window.
 GESTURE_WINDOW = 0.6

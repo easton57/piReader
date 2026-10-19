@@ -19,7 +19,7 @@ import threading
 import time
 from enum import Enum
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from button import ButtonHandler
 from config import (
@@ -37,7 +37,7 @@ from config import (
     SHUTDOWN_COMMAND,
     WEBUI_PORT,
 )
-from display import EPaperDisplay, load_font
+from display import EPaperDisplay, load_font, new_draw
 from documents import load_book, load_text
 from kosync import SyncWorker, partial_md5
 from cloud import CloudSource
@@ -84,7 +84,7 @@ class Application:
         self.reader = TextReader(font_size=FONT_SIZE)
         self.pdf_reader = PDFReader(cache_dir=CACHE_DIR)
         self.font = load_font(FONT_SIZE)
-        self.small_font = load_font(9)
+        self.small_font = load_font(10)
 
         self.mode = AppMode.BROWSER
         self.current_file = None
@@ -393,7 +393,7 @@ class Application:
 
     def _show_message(self, text):
         img = self.display.create_canvas()
-        draw = ImageDraw.Draw(img)
+        draw = new_draw(img)
         lines = self.reader._wrap(text) if text else []
         y = (DISPLAY_HEIGHT - len(lines) * (FONT_SIZE + 2)) // 2
         for line in lines:
@@ -412,7 +412,7 @@ class Application:
     def _render_browser(self):
         self.browser.refresh_if_changed()
         img = self.display.create_canvas()
-        draw = ImageDraw.Draw(img)
+        draw = new_draw(img)
         width = DISPLAY_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
 
         # Header: folder name + battery
@@ -501,6 +501,10 @@ def main():
         logger.info(f"Web UI on port {WEBUI_PORT}")
 
     app = Application(mock=args.mock)
+    if not args.no_webui:
+        import webui
+
+        webui.ACTION_QUEUE = app.actions
     if args.mock:
         threading.Thread(target=stdin_gestures, args=(app,), daemon=True).start()
     app.start()

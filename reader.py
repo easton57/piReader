@@ -4,7 +4,7 @@ import bisect
 import logging
 import time
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from config import (
     DISPLAY_HEIGHT,
@@ -16,7 +16,7 @@ from config import (
     MARGIN_TOP,
 )
 from book import normalize
-from display import load_font
+from display import load_font, new_draw
 from pisugar import get_battery_percentage
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ class TextReader:
     def __init__(self, font_size=FONT_SIZE):
         self.font_size = font_size
         self.font = load_font(font_size)
-        self.footer_font = load_font(9)
+        self.footer_font = load_font(10)
         self.title = ""
         self.book = None
         self.pages = [[]]
@@ -187,7 +187,7 @@ class TextReader:
 
     def render(self):
         image = Image.new("L", (self.WIDTH, self.HEIGHT), 255)
-        draw = ImageDraw.Draw(image)
+        draw = new_draw(image)
 
         y = MARGIN_TOP
         for line in self.pages[self.current_page]:

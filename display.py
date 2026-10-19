@@ -1,7 +1,7 @@
 import logging
 import os
 
-from PIL import Image, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from config import (
     DISPLAY_HEIGHT,
@@ -17,6 +17,14 @@ WIDTH = DISPLAY_WIDTH
 HEIGHT = DISPLAY_HEIGHT
 
 _font_cache = {}
+
+
+def new_draw(image):
+    """ImageDraw with anti-aliasing off. The panel is 1-bit: anti-aliased glyph
+    edges get thresholded away (thin strokes vanish, worst in inverted rows)."""
+    draw = ImageDraw.Draw(image)
+    draw.fontmode = "1"
+    return draw
 
 
 def load_font(size):

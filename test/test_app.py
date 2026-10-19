@@ -95,3 +95,29 @@ def test_webui_upload_and_delete(app):
     client.post("/delete/new_book.txt")
     assert not os.path.exists(os.path.join(config.LIBRARY_PATH, "new_book.txt"))
     assert client.post("/delete/..%2Fconfig.py").status_code == 302
+
+
+def test_webui_shutdown_queues_action(app):
+    import webui
+
+    webui.ACTION_QUEUE = app.actions
+    try:
+        r = webui.app.test_client().post("/shutdown")
+        assert r.status_code == 200
+        assert app.actions.get_nowait() == "shutdown"
+    finally:
+        webui.ACTION_QUEUE = None
+
+
+def test_inverted_row_text_survives_threshold(app):
+    """Regression: anti-aliased white-on-black text was thresholded away."""
+    from display import EPaperDisplay
+    from PIL import Image
+
+    img = EPaperDisplay.to_1bit(app._render_browser())
+    row = img.crop((0, 14, 250, 14 + config.FONT_SIZE + 2))  # highlighted first row
+    white = sum(1 for p in row.getdata() if p)
+    clean = Image.new("L", row.size, 0)
+    from display import load_font, new_draw
+    new_draw(clean).text((config.MARGIN_LEFT, 1), "Folder/", fill=255, font=load_font(config.FONT_SIZE))
+    assert white >= 0.9 * sum(1 for p in clean.getdata() if p)

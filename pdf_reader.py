@@ -8,11 +8,11 @@ page shrunk to 250x122 is unreadable.
 import logging
 import os
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from config import DISPLAY_HEIGHT, DISPLAY_WIDTH, PDF_DPI
 from documents import file_key
-from display import load_font
+from display import load_font, new_draw
 from reader import draw_footer
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class PDFReader:
         self.file_path = None
         self.page_count = 0
         self.current_page = 0
-        self.font = load_font(9)
+        self.font = load_font(10)
 
     def open(self, path):
         try:
@@ -101,7 +101,7 @@ class PDFReader:
         except Exception as e:
             logger.error(f"Failed to render page {self.current_page + 1}: {e}")
             img = Image.new("L", (self.WIDTH, self.HEIGHT), 255)
-            ImageDraw.Draw(img).text((6, 40), "Couldn't render page", fill=0, font=self.font)
-        draw = ImageDraw.Draw(img)
+            new_draw(img).text((6, 40), "Couldn't render page", fill=0, font=self.font)
+        draw = new_draw(img)
         draw_footer(draw, self.font, "PDF", f"{self.current_page + 1}/{self.page_count}")
         return img
