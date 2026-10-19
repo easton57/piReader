@@ -121,3 +121,28 @@ def test_inverted_row_text_survives_threshold(app):
     from display import load_font, new_draw
     new_draw(clean).text((config.MARGIN_LEFT, 1), "Folder/", fill=255, font=load_font(config.FONT_SIZE))
     assert white >= 0.9 * sum(1 for p in clean.getdata() if p)
+
+
+def test_partial_refresh_only_in_file_list(app):
+    act(app, "next")
+    assert app.display.last_refresh == "partial"   # moving in the list
+    act(app, "long")
+    assert app.mode == main.AppMode.READER
+    assert app.display.last_refresh == "full"      # opening a book
+    act(app, "next")
+    assert app.display.last_refresh == "full"      # page turns
+    act(app, "long")
+    assert app.display.last_refresh == "full"      # back to the list
+    act(app, "prev")
+    assert app.display.last_refresh == "partial"
+
+
+def test_book_partial_refresh_setting(app, monkeypatch):
+    monkeypatch.setattr(main, "BOOK_FULL_REFRESH_EVERY", 3)
+    act(app, "next", "long")
+    assert app.display.last_refresh == "full"  # opening is always full
+    seen = []
+    for _ in range(6):
+        act(app, "next")
+        seen.append(app.display.last_refresh)
+    assert seen == ["partial", "partial", "full", "partial", "partial", "full"]

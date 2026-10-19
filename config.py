@@ -6,7 +6,16 @@ BASE_DIR = os.environ.get(
     "PIREADER_DIR", os.path.dirname(os.path.abspath(__file__))
 )
 
-# Waveshare 2.13" e-Paper (B) V4: 250x122, black/white/red, full refresh only.
+# Waveshare 2.13" e-Paper, 250x122. Driver module in waveshare/:
+#   "epd2in13_V4"  black/white V4: partial refresh for the file list
+#   "epd2in13b_V4" black/white/red (B) V4: full refresh only (~15 s)
+DISPLAY_DRIVER = "epd2in13_V4"
+# File list uses partial refresh; force a full one after this many in a row
+# to clear ghosting.
+PARTIAL_REFRESH_LIMIT = 15
+# Book pages: full refresh every N page turns, partial in between.
+# 1 = every page is a full refresh (cleanest text); e.g. 5 = 4 fast turns, then a full one.
+BOOK_FULL_REFRESH_EVERY = 1
 DISPLAY_WIDTH = 250
 DISPLAY_HEIGHT = 122
 # Rotation applied before sending to the panel (depends on how the HAT is mounted).

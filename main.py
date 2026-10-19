@@ -23,6 +23,7 @@ from PIL import Image
 
 from button import ButtonHandler
 from config import (
+    BOOK_FULL_REFRESH_EVERY,
     CACHE_DIR,
     CLOUD_LABEL,
     DEBUG_MODE,
@@ -34,6 +35,7 @@ from config import (
     MARGIN_LEFT,
     MARGIN_RIGHT,
     MARGIN_TOP,
+    PARTIAL_REFRESH_LIMIT,
     SHUTDOWN_COMMAND,
     WEBUI_PORT,
 )
@@ -81,6 +83,7 @@ class Application:
         self.sync = SyncWorker()
         self.doc_id = None  # KOReader document hash of the open EPUB
         self._remote_applied = None
+        self._last_screen = None  # (mode, file) on the panel; None after a message/screensaver
         self.reader = TextReader(font_size=FONT_SIZE)
         self.pdf_reader = PDFReader(cache_dir=CACHE_DIR)
         self.font = load_font(FONT_SIZE)
@@ -386,6 +389,7 @@ class Application:
             canvas = self.display.create_canvas()
             canvas.paste(img, ((DISPLAY_WIDTH - img.width) // 2, (DISPLAY_HEIGHT - img.height) // 2))
             self.display.show(canvas, dither=True)
+            self._last_screen = None
             return True
         except Exception as e:
             logger.error(f"Failed to show screensaver: {e}")
@@ -401,13 +405,21 @@ class Application:
             draw.text(((DISPLAY_WIDTH - w) // 2, y), line, fill=0, font=self.font)
             y += FONT_SIZE + 2
         self.display.show(img)
+        self._last_screen = None
 
     def _render(self):
+        # Partial refresh for moving around the file list, and for page turns
+        # if BOOK_FULL_REFRESH_EVERY > 1. Any screen change (opening a book,
+        # going back, a message) is a full refresh.
+        screen = (self.mode, self.current_file)
+        partial = screen == self._last_screen
         if self.mode == AppMode.BROWSER:
-            img = self._render_browser()
+            img, limit = self._render_browser(), PARTIAL_REFRESH_LIMIT
         else:
-            img = self._active_reader().render()
-        self.display.show(img, dither=self.mode == AppMode.PDF_IMAGE)
+            img, limit = self._active_reader().render(), BOOK_FULL_REFRESH_EVERY - 1
+        self.display.show(img, dither=self.mode == AppMode.PDF_IMAGE,
+                          partial=partial, limit=limit)
+        self._last_screen = screen
 
     def _render_browser(self):
         self.browser.refresh_if_changed()

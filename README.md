@@ -25,12 +25,13 @@ Perfect for bookworms who love tinkering with hardware! 🐛
 | **Raspberry Pi Zero W** | The brain, with built-in WiFi for the web UI |
 | **PiSugar 2** | Battery (its button works as input too) |
 | **Push button** (optional) | GPIO → GND, e.g. BCM20 (pin 38) + GND (pin 39); set `BUTTON_GPIO` in `config.py` |
-| **Waveshare 2.13" e-Paper (B) V4** | 250×122 black/white/red panel (red isn't used) |
+| **Waveshare 2.13" e-Paper V4** | 250×122 black/white panel (the red (B) V4 also works) |
 
-> ⚠️ The (B) tri-colour panel only supports full refreshes, which take ~15 s each.
-> piReader coalesces queued taps and skips refreshes when nothing changed, but every
-> page turn still costs a full refresh. The black/white **2.13" V4** (non-B) does
-> partial refresh in well under a second and would make a much better reader.
+> Set `DISPLAY_DRIVER` in `config.py`: `epd2in13_V4` for the black/white V4 (default) or
+> `epd2in13b_V4` for the red/black/white (B) V4. On the black/white panel the file list uses
+> fast partial refresh (full every `PARTIAL_REFRESH_LIMIT` moves to clear ghosting); book pages
+> get a full refresh every `BOOK_FULL_REFRESH_EVERY` turns (default 1 = every page). The (B)
+> panel only does full refreshes (~15 s).
 
 ### Pin Connections
 
