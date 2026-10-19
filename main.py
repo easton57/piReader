@@ -234,11 +234,17 @@ class Application:
             mode = AppMode.PDF_IMAGE
 
         if is_pdf:  # text extraction can take a while on a Pi Zero
-            self._show_message(f"Opening {os.path.basename(path)}...")
+            self._show_message(f"Opening {self.browser.label(os.path.basename(path))}..."
+                               "\nLong press to cancel")
         ok = False
         if mode == AppMode.READER:
             try:
-                book = load_book(path, CACHE_DIR)
+                book = self._load_cancellable(path) if is_pdf else load_book(path, CACHE_DIR)
+                if book is None:  # cancelled
+                    self.notice = "Cancelled"
+                    self.mode = AppMode.BROWSER
+                    self.current_file = None
+                    return False
                 if book.total_chars > 1 or not is_pdf:
                     self.reader.load_book(book, title=os.path.basename(path))
                     ok = True
@@ -270,6 +276,40 @@ class Application:
             self._pull_progress(path, progress)
         self._save_progress()
         return True
+
+    def _load_cancellable(self, path):
+        """Load a (slow) document in a worker thread while still listening to
+        the buttons: a long press cancels. Returns the Book, or None if cancelled."""
+        from documents import Cancelled
+
+        cancel = threading.Event()
+        result = {}
+
+        def work():
+            try:
+                result["book"] = load_book(path, CACHE_DIR, cancel)
+            except Cancelled:
+                pass
+            except Exception as e:  # re-raised on the main thread
+                result["error"] = e
+
+        worker = threading.Thread(target=work, daemon=True, name="Loader")
+        worker.start()
+        while worker.is_alive():
+            try:
+                action = self.actions.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if action in ("long", "shutdown"):
+                logger.info("Open cancelled")
+                cancel.set()
+                if action == "shutdown":
+                    self.actions.put("shutdown")  # handle it after unwinding
+            # Other taps while loading are dropped.
+        worker.join()
+        if "error" in result:
+            raise result["error"]
+        return result.get("book")
 
     def _pull_progress(self, path, local):
         """Jump to the synced position if another device read further more recently."""
@@ -398,7 +438,7 @@ class Application:
     def _show_message(self, text):
         img = self.display.create_canvas()
         draw = new_draw(img)
-        lines = self.reader._wrap(text) if text else []
+        lines = [l for part in (text or "").split("\n") for l in self.reader._wrap(part)]
         y = (DISPLAY_HEIGHT - len(lines) * (FONT_SIZE + 2)) // 2
         for line in lines:
             w = draw.textlength(line, font=self.font)

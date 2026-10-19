@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import time
 
 import pytest
 
@@ -146,3 +147,32 @@ def test_book_partial_refresh_setting(app, monkeypatch):
         act(app, "next")
         seen.append(app.display.last_refresh)
     assert seen == ["partial", "partial", "full", "partial", "partial", "full"]
+
+
+def test_pdf_open_uses_pdftotext_and_can_be_cancelled(app, monkeypatch, tmp_path):
+    import threading
+
+    import documents
+    from reportlab.pdfgen import canvas
+
+    pdf = os.path.join(config.LIBRARY_PATH, "slow.pdf")
+    c = canvas.Canvas(pdf)
+    c.drawString(72, 720, "Hello from a PDF page.")
+    c.showPage()
+    c.save()
+
+    # Normal open goes through pdftotext.
+    assert app._open(pdf)
+    assert "Hello from a PDF page." in app.reader.book.chapters[0].paragraphs[0]
+    act(app, "long")
+
+    # A stuck extractor: long press must cancel it promptly.
+    for f in os.listdir(config.CACHE_DIR):
+        if f.endswith(".txt"):
+            os.remove(os.path.join(config.CACHE_DIR, f))
+    monkeypatch.setattr(documents, "PDFTOTEXT", ["sh", "-c", "sleep 30", "x"])
+    threading.Timer(0.5, lambda: app.actions.put("long")).start()
+    t = time.monotonic()
+    assert not app._open(pdf)
+    assert time.monotonic() - t < 5
+    assert app.mode == main.AppMode.BROWSER and app.notice == "Cancelled"

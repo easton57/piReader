@@ -4,6 +4,9 @@ import hashlib
 import logging
 import os
 import re
+import shutil
+import signal
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -38,25 +41,71 @@ def read_markdown(path):
     return text
 
 
-def read_pdf_text(path, cache_dir):
-    """Extract PDF text with pdfminer, cached because it's slow on a Pi Zero."""
+class Cancelled(Exception):
+    """Opening was cancelled by the user."""
+
+
+# poppler's pdftotext (C, installed with poppler-utils for pdf2image) is tens
+# of times faster than pdfminer, which is pure Python and can take many
+# minutes on a Pi Zero. pdfminer stays as a fallback.
+PDFTOTEXT = ["pdftotext", "-enc", "UTF-8"]
+
+
+def _pdftotext(path, cancel):
+    if not shutil.which(PDFTOTEXT[0]):
+        return None
+    proc = subprocess.Popen(PDFTOTEXT + [path, "-"], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+    while True:
+        try:
+            out, _ = proc.communicate(timeout=0.2)
+            break
+        except subprocess.TimeoutExpired:
+            if cancel is not None and cancel.is_set():
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)  # whole group, children too
+                except ProcessLookupError:
+                    pass
+                proc.communicate()
+                raise Cancelled()
+    if proc.returncode != 0:
+        raise ValueError(f"pdftotext failed (exit {proc.returncode})")
+    return out.decode("utf-8", errors="replace")
+
+
+def _pdfminer_text(path, cancel):
+    from pdfminer.high_level import extract_pages
+    from pdfminer.layout import LTTextContainer
+
+    pages = []
+    for page in extract_pages(path):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        pages.append("".join(el.get_text() for el in page if isinstance(el, LTTextContainer)))
+    return "\x0c".join(pages)
+
+
+def read_pdf_text(path, cache_dir, cancel=None):
+    """Extract PDF text (cached). cancel: threading.Event to abort early."""
     cache_file = os.path.join(cache_dir, f"{file_key(path)}.txt")
     if os.path.exists(cache_file):
         return read_plain(cache_file)
-    from pdfminer.high_level import extract_text
-
-    text = extract_text(path) or ""
-    # pdfminer hard-wraps at the PDF's line breaks; rejoin lines within a paragraph.
+    text = _pdftotext(path, cancel)
+    if text is None:
+        logger.warning("pdftotext not found (apt install poppler-utils); using slow pdfminer")
+        text = _pdfminer_text(path, cancel)
+    # Text comes hard-wrapped at the PDF's line breaks; rejoin lines within a paragraph.
     text = text.replace("\x0c", "\n\n")
     text = re.sub(r"-\n(?=[a-z])", "", text)
     text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
     os.makedirs(cache_dir, exist_ok=True)
-    with open(cache_file, "w", encoding="utf-8") as f:
+    with open(cache_file + ".tmp", "w", encoding="utf-8") as f:
         f.write(text)
+    os.replace(cache_file + ".tmp", cache_file)
     return text
 
 
-def load_book(path, cache_dir):
+def load_book(path, cache_dir, cancel=None):
     """Return a book.Book for a .txt/.md/.epub/.pdf file, or raise."""
     import book
 
@@ -68,7 +117,7 @@ def load_book(path, cache_dir):
     if ext == ".md":
         return book.from_text(read_markdown(path))
     if ext == ".pdf":
-        return book.from_text(read_pdf_text(path, cache_dir), kind="pdf")
+        return book.from_text(read_pdf_text(path, cache_dir, cancel), kind="pdf")
     raise ValueError(f"Unsupported file type: {ext}")
 
 
