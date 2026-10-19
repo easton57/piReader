@@ -224,3 +224,29 @@ def test_downloaded_cloud_books_on_home_page(server, tmp_path):
     fb.move_down(); fb.move_down()
     assert fb.get_selected_path() == os.path.join(cloud.mirror_root, "1779244646577.epub")
     assert fb.select_path(os.path.join(cloud.mirror_root, "1779244646577.epub"))
+
+
+def test_webui_lists_and_removes_downloads(server):
+    import webui
+
+    shutil.rmtree(config.BASE_DIR, ignore_errors=True)
+    os.makedirs(config.LIBRARY_PATH)
+    make_koodo_tree(server["root"] / "Books")
+    webdav.save_settings(f"{server['url']}/KoodoReader/book", USER, PASSWORD)
+    cloud = CloudSource(config.LIBRARY_PATH)
+    book = os.path.join(cloud.mirror_root, "1779244646577.epub")
+    cloud.download(book)
+    cloud.title_for(cloud.mirror_root, "1779244646577.epub")  # caches books.db like the reader does
+
+    client = webui.app.test_client()
+    page = client.get("/").get_data(as_text=True)
+    assert "Downloaded from Cloud (1)" in page and "Moby-Dick - Herman Melville" in page
+
+    assert b"not found" in client.post("/downloads/delete", data={"path": "../config.py"},
+                                       follow_redirects=True).data
+    r = client.post("/downloads/delete", data={"path": ".cloud/1779244646577.epub"},
+                    follow_redirects=True)
+    assert b"Removed Moby-Dick" in r.data
+    assert not os.path.exists(book)
+    assert "Nothing downloaded" in client.get("/").get_data(as_text=True)
+    assert not os.path.exists(cloud.mirror_root + "/KoodoReader")

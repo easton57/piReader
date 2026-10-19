@@ -142,6 +142,7 @@ h1{font-size:1.5rem;color:#222}
 <div class="card"><h2>Screensaver</h2><div class="screensaver">{%if screensaver%}<div class="screensaver-thumb"><img src="{{url_for("screensaver_file",filename=screensaver_filename)}}" alt="Current screensaver"></div><div><p style="margin-bottom:12px">Current screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Change Screensaver</button></form></div>{%else%}<div class="empty-state" style="padding:20px;text-align:left"><p style="margin-bottom:12px">No screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Set Screensaver</button></form></div>{%endif%}</div></div>
 <div class="card"><h2>Library ({{books|length}} books)</h2>{%if books%}<ul class="file-list">{%for book in books%}<li class="file-item"><div class="file-info"><span class="file-ext {{book.extension[1:]}}">{{book.extension[1:]}}</span><span class="file-name">{{book.name}}</span><span class="file-size">{{book.size_formatted}}</span></div><form action="{{url_for("delete_file",filename=book.name)}}" method="post"><button type="submit" class="delete-btn" onclick="return confirm('Delete ' + this.dataset.name + '?')" data-name="{{book.name}}">Delete</button></form></li>{%endfor%}</ul>{%else%}<div class="empty-state"><p>No books in library</p><p style="font-size:0.85rem;margin-top:8px">Upload .txt, .md, .epub, or .pdf files below</p></div>{%endif%}</div>
 <div class="card"><h2>Power</h2><form action="{{url_for("shutdown")}}" method="post"><button type="submit" class="btn" style="background:#c62828" onclick="return confirm('Shut down the reader?')">Shut down</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Saves your place and powers off. Same as holding the GPIO button for 3 s.</p></div>
+<div class="card"><h2>Downloaded from Cloud ({{downloads|length}})</h2>{%if downloads%}<ul class="file-list">{%for d in downloads%}<li class="file-item"><div class="file-info"><span class="file-ext {{d.extension[1:]}}">{{d.extension[1:]}}</span><span class="file-name">{{d.title}}</span><span class="file-size">{{d.size_formatted}}</span></div><form action="{{url_for("delete_download")}}" method="post"><input type="hidden" name="path" value="{{d.rel}}"><button type="submit" class="delete-btn" onclick="return confirm('Remove the downloaded copy of ' + this.dataset.name + '? It stays in the cloud; reading progress is kept.')" data-name="{{d.title}}">Remove</button></form></li>{%endfor%}</ul><p style="margin-top:12px;font-size:0.85rem;color:#666">Total {{downloads_total}}. Removing only frees space on the reader; the book stays in the cloud and progress is kept.</p>{%else%}<div class="empty-state" style="padding:20px"><p>Nothing downloaded</p></div>{%endif%}</div>
 <div class="card"><h2>Upload Books</h2><form action="{{url_for("upload")}}" method="post" enctype="multipart/form-data" class="upload-form"><input type="file" name="file" multiple accept=".txt,.md,.epub,.pdf" required><button type="submit" class="btn">Upload</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Supported formats: .txt, .md, .epub, .pdf (max {{max_mb}}MB)</p></div>
 </div>
 </body>
@@ -158,6 +159,7 @@ def index():
     books = get_library_files()
     for book in books:
         book["size_formatted"] = format_file_size(book["size"])
+    downloads = get_downloads()
     screensaver = get_current_screensaver()
     screensaver_filename = os.path.basename(screensaver) if screensaver else None
     return render_template_string(
@@ -169,6 +171,8 @@ def index():
         is_pi=IS_PI,
         max_mb=MAX_UPLOAD_MB,
         cloud=_cloud_view(),
+        downloads=downloads,
+        downloads_total=format_file_size(sum(d["size"] for d in downloads)),
         kosync=_kosync_view(),
     )
 
@@ -328,6 +332,42 @@ def delete_file(filename):
         flash(f"Deleted {filename}", "success")
     except OSError as e:
         flash(f"Error deleting file: {e}", "error")
+    return redirect(url_for("index"))
+
+
+def _cloud():
+    from cloud import CloudSource
+
+    return CloudSource(UPLOAD_FOLDER)
+
+
+def get_downloads():
+    """Downloaded cloud books with titles (cached Koodo names, no network)."""
+    cloud = _cloud()
+    items = []
+    for rel in cloud.downloaded_books(UPLOAD_FOLDER):
+        full = os.path.join(UPLOAD_FOLDER, rel)
+        name = os.path.basename(rel)
+        title = cloud.title_for(os.path.dirname(full), name, fetch=False) or name
+        size = os.path.getsize(full)
+        items.append({"rel": rel, "title": title, "size": size,
+                      "size_formatted": format_file_size(size),
+                      "extension": os.path.splitext(name)[1].lower()})
+    return sorted(items, key=lambda d: d["title"].lower())
+
+
+@app.route("/downloads/delete", methods=["POST"])
+def delete_download():
+    rel = request.form.get("path", "")
+    match = next((d for d in get_downloads() if d["rel"] == rel), None)
+    if match is None:  # only paths we listed: no traversal
+        flash("Download not found", "error")
+        return redirect(url_for("index"))
+    try:
+        _cloud().delete_download(os.path.join(UPLOAD_FOLDER, rel))
+        flash(f"Removed {match['title']} from the reader", "success")
+    except (OSError, ValueError) as e:
+        flash(f"Couldn't remove it: {e}", "error")
     return redirect(url_for("index"))
 
 

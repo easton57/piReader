@@ -10,6 +10,7 @@ import logging
 import os
 import posixpath
 import re
+import shutil
 import sqlite3
 import time
 
@@ -98,22 +99,47 @@ class CloudSource:
                     found.append(os.path.relpath(os.path.join(dirpath, f), library_root))
         return found
 
+    def delete_download(self, local_path):
+        """Remove a downloaded copy and its caches. Reading progress is kept,
+        so downloading it again resumes where you were."""
+        from documents import file_key
+
+        local_path = os.path.abspath(local_path)
+        if not self.contains(local_path) or not os.path.isfile(local_path):
+            raise ValueError("Not a downloaded cloud book")
+        key = file_key(local_path)
+        os.remove(local_path)
+        for name in (f"{key}.book", f"{key}.txt"):
+            try:
+                os.remove(os.path.join(self.cache_dir, name))
+            except FileNotFoundError:
+                pass
+        shutil.rmtree(os.path.join(self.cache_dir, key), ignore_errors=True)  # PDF page images
+        # Drop now-empty mirror folders.
+        folder = os.path.dirname(local_path)
+        while folder != self.mirror_root and self.contains(folder) and not os.listdir(folder):
+            os.rmdir(folder)
+            folder = os.path.dirname(folder)
+
     # --- Koodo Reader titles ------------------------------------------------
 
-    def title_for(self, local_dir, name):
-        """Readable title for a Koodo-named file ("1779244646577.epub"), else None."""
+    def title_for(self, local_dir, name, fetch=True):
+        """Readable title for a Koodo-named file ("1779244646577.epub"), else None.
+        fetch=False only uses the cached copy of Koodo's books.db (no network)."""
         m = KOODO_FILE.match(name)
         if not m:
             return None
-        return self._koodo_titles(local_dir).get(m.group(1))
+        return self._koodo_titles(local_dir, fetch).get(m.group(1))
 
-    def _koodo_titles(self, local_dir):
+    def _koodo_titles(self, local_dir, fetch=True):
         rel = self.rel(local_dir)
         cached = self._titles.get(rel)
         if cached and time.monotonic() - cached[0] < CLOUD_LIST_TTL:
             return cached[1]
         db_path = os.path.join(
             self.cache_dir, f"koodo-books-{hashlib.md5(rel.encode()).hexdigest()[:8]}.db")
+        if not fetch:
+            return read_koodo_titles(db_path)
         client = self._client_factory()
         if client is not None:
             try:
