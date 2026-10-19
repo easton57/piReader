@@ -207,3 +207,20 @@ def test_non_koodo_folder_untouched(server, tmp_path):
     fb.enter(cloud.mirror_root)
     assert fb.label("Dune & Co.txt") == "Dune & Co.txt"
     assert not os.path.exists(cloud.cache_dir)  # never fetched a books.db
+
+
+def test_downloaded_cloud_books_on_home_page(server, tmp_path):
+    make_koodo_tree(server["root"] / "Books")
+    fb, cloud = make_browser(tmp_path, f"{server['url']}/KoodoReader/book")
+    cloud.cache_dir = str(tmp_path / "cache")
+    (tmp_path / "lib" / "local.txt").write_text("x")
+    fb.enter(cloud.mirror_root)
+    cloud.download(os.path.join(cloud.mirror_root, "1779244646577.epub"))
+    fb.go_up()
+    fb.refresh()
+    labels = [fb.label(n) for n, _ in fb.get_items_for_display()]
+    # Only the downloaded one (not Anathem), shown by title, sorted with local files.
+    assert labels == [config.CLOUD_LABEL, "local.txt", "Moby-Dick - Herman Melville"]
+    fb.move_down(); fb.move_down()
+    assert fb.get_selected_path() == os.path.join(cloud.mirror_root, "1779244646577.epub")
+    assert fb.select_path(os.path.join(cloud.mirror_root, "1779244646577.epub"))

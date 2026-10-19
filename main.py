@@ -216,7 +216,9 @@ class Application:
             self._save_progress()
             self.sync.flush()  # send now rather than after the delay
             self.browser.set_last_open(None)
-            self.browser.reveal(self.current_file)
+            # Back to wherever it was opened from (home page or its folder).
+            if not self.browser.select_path(self.current_file):
+                self.browser.reveal(self.current_file)
             self.mode = AppMode.BROWSER
             self.current_file = None
             return

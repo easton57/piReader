@@ -58,7 +58,7 @@ SHUTDOWN_HOLD = 3.0
 # 0 disables it.
 IDLE_TIMEOUT = 300
 
-# Command run on the shutdown gesture (3s hold, or 5 taps without a GPIO button). Empty string = just exit the app.
+# Command run on shutdown (GPIO 3s hold or the web UI button). Empty string = just exit the app.
 SHUTDOWN_COMMAND = "sudo -n systemctl poweroff"
 
 # WebDAV "Cloud" folder. Credentials are in this file (gitignored), set them
@@ -66,6 +66,8 @@ SHUTDOWN_COMMAND = "sudo -n systemctl poweroff"
 WEBDAV_SETTINGS_FILE = os.path.join(BASE_DIR, "webdav.json")
 WEBDAV_TIMEOUT = 8
 CLOUD_LABEL = "[Cloud]"
+# Also list downloaded cloud books on the home page, next to local ones.
+SHOW_CLOUD_ON_HOME = True
 # Remote listings are re-fetched when you enter a folder, or after this long.
 CLOUD_LIST_TTL = 120
 

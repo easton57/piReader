@@ -87,6 +87,17 @@ class CloudSource:
         logger.info(f"Downloading {self.rel(local_path)}")
         return client.download(self.rel(local_path), local_path)
 
+    def downloaded_books(self, library_root):
+        """Downloaded cloud books as paths relative to library_root
+        (".cloud/KoodoReader/book/123.epub"), for listing on the home page."""
+        found = []
+        for dirpath, dirnames, filenames in os.walk(self.mirror_root):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            for f in filenames:
+                if not f.startswith(".") and os.path.splitext(f)[1].lower() in SUPPORTED_EXTENSIONS:
+                    found.append(os.path.relpath(os.path.join(dirpath, f), library_root))
+        return found
+
     # --- Koodo Reader titles ------------------------------------------------
 
     def title_for(self, local_dir, name):

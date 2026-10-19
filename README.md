@@ -60,7 +60,7 @@ BUSY    → Pin 18 (GPIO24)
 - **Battery level** from pisugar-server
 - **Screensaver** after `IDLE_TIMEOUT` (default 5 min) and on shutdown
 - **Cloud folder (WebDAV)**: browse a Nextcloud/WebDAV folder from the reader; a book downloads
-  when you open it (marked with ↓ until then) and is then available offline
+  when you open it (marked with ↓ until then), then shows up on the home page too and works offline
 - **Reading progress sync with Koodo Reader / KOReader** (EPUB) over the KOReader sync protocol
 - **Web UI** on port 5000 for uploading/deleting books, setting the screensaver, and shutting down
 

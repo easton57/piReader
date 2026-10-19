@@ -3,7 +3,7 @@ import logging
 import os
 from typing import List, Optional, Tuple
 
-from config import CLOUD_LABEL, SUPPORTED_EXTENSIONS
+from config import CLOUD_LABEL, SHOW_CLOUD_ON_HOME, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +112,9 @@ class FileBrowser:
                         remote_only.add(name)
         self.remote_only = remote_only
 
+        if self.is_root() and self.cloud is not None and SHOW_CLOUD_ON_HOME:
+            files.extend((name, False) for name in self.cloud.downloaded_books(self.root_path))
+
         key = lambda item: self.label(item[0]).lower()
         top = []
         if self.current_path != self.root_path:
@@ -159,11 +162,23 @@ class FileBrowser:
 
     def label(self, name: str) -> str:
         """Display name: Koodo's book title for its numbered files, else the filename."""
-        if self.in_cloud():
-            title = self.cloud.title_for(self.current_path, name)
-            if title:
-                return title
+        if self.cloud is not None:
+            full = os.path.join(self.current_path, name)
+            if self.cloud.contains(full) and full != self.cloud.mirror_root:
+                title = self.cloud.title_for(os.path.dirname(full), os.path.basename(full))
+                if title:
+                    return title
+                if os.sep in name:  # downloaded cloud book listed on the home page
+                    return os.path.basename(name)
         return name
+
+    def select_path(self, path: str) -> bool:
+        """Put the cursor on path if it's listed in the current folder."""
+        for i, (name, _) in enumerate(self.items):
+            if os.path.join(self.current_path, name) == path:
+                self.cursor_position = i
+                return True
+        return False
 
     def selected_is_dir(self) -> bool:
         return bool(self.items) and self.items[self.cursor_position][1]
