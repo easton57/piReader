@@ -122,6 +122,7 @@ h1{font-size:1.5rem;color:#222}
 .status-value{font-size:1.25rem;font-weight:600}
 .cloud-form{display:flex;flex-direction:column;gap:10px}
 .cloud-form label{display:flex;flex-direction:column;font-size:0.85rem;color:#555;gap:4px}
+.cloud-form select{padding:8px;border:1px solid #ddd;border-radius:4px;font-size:0.95rem;background:#fff}
 .cloud-form input{padding:8px;border:1px solid #ddd;border-radius:4px;font-size:0.95rem}
 .cloud-form .btn{align-self:flex-start}
 </style>
@@ -139,6 +140,7 @@ h1{font-size:1.5rem;color:#222}
 <div class="card"><h2>Status</h2><div class="status-info"><div class="status-item"><span class="status-label">Battery</span><span class="status-value">{{battery}}%</span></div><div class="status-item"><span class="status-label">Books</span><span class="status-value">{{books|length}}</span></div><div class="status-item"><span class="status-label">Running on Pi</span><span class="status-value">{{"Yes" if is_pi else "No"}}</span></div></div></div>
 <div class="card"><h2>Cloud (WebDAV)</h2><form action="{{url_for("cloud_settings")}}" method="post" class="cloud-form"><label>Folder URL<input type="url" name="url" value="{{cloud.url}}" placeholder="https://cloud.example.com/remote.php/dav/files/USER/Books"></label><label>User<input type="text" name="user" value="{{cloud.user}}" autocomplete="username"></label><label>Password / app password<input type="password" name="password" placeholder="{{"(unchanged)" if cloud.has_password else ""}}" autocomplete="new-password"></label><button type="submit" class="btn">Save &amp; test</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Shows up as [Cloud] on the reader. Books download when you open them. Leave the URL empty to turn it off. For Nextcloud, use an app password.</p></div>
 <div class="card"><h2>Reading progress sync (KOReader / Koodo)</h2><form action="{{url_for("kosync_settings")}}" method="post" class="cloud-form"><label>Sync server URL<input type="url" name="url" value="{{kosync.url}}" placeholder="https://sync.koreader.rocks"></label><label>User<input type="text" name="user" value="{{kosync.user}}" autocomplete="username"></label><label>Password<input type="password" name="password" placeholder="{{"(unchanged)" if kosync.configured else ""}}" autocomplete="new-password"></label><label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="register"> Create this account on the server</label><button type="submit" class="btn">Save &amp; test</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Use the same server and login in Koodo Reader under Settings &gt; "Auto sync reading progress with KOReader". EPUBs only. Leave the URL empty to turn it off.</p></div>
+<div class="card"><h2>Reader settings</h2><form action="{{url_for("save_settings")}}" method="post" class="cloud-form">{%for s in reader_settings%}<label>{{s.label}}<select name="{{s.key}}">{%for v,text in s.options%}<option value="{{v}}" {{"selected" if v==s.value}}>{{text}}</option>{%endfor%}</select></label>{%endfor%}<button type="submit" class="btn">Save</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Also on the reader: [Settings] at the bottom of the home screen. Changes apply right away; changing the font re-flows the open book and keeps your place. Drop extra .ttf/.otf files in the fonts/ folder to add fonts.</p></div>
 <div class="card"><h2>Screensaver</h2><div class="screensaver">{%if screensaver%}<div class="screensaver-thumb"><img src="{{url_for("screensaver_file",filename=screensaver_filename)}}" alt="Current screensaver"></div><div><p style="margin-bottom:12px">Current screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Change Screensaver</button></form></div>{%else%}<div class="empty-state" style="padding:20px;text-align:left"><p style="margin-bottom:12px">No screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Set Screensaver</button></form></div>{%endif%}</div></div>
 <div class="card"><h2>Library ({{books|length}} books)</h2>{%if books%}<ul class="file-list">{%for book in books%}<li class="file-item"><div class="file-info"><span class="file-ext {{book.extension[1:]}}">{{book.extension[1:]}}</span><span class="file-name">{{book.name}}</span><span class="file-size">{{book.size_formatted}}</span></div><form action="{{url_for("delete_file",filename=book.name)}}" method="post"><button type="submit" class="delete-btn" onclick="return confirm('Delete ' + this.dataset.name + '?')" data-name="{{book.name}}">Delete</button></form></li>{%endfor%}</ul>{%else%}<div class="empty-state"><p>No books in library</p><p style="font-size:0.85rem;margin-top:8px">Upload .txt, .md, .epub, or .pdf files below</p></div>{%endif%}</div>
 <div class="card"><h2>Power</h2><form action="{{url_for("shutdown")}}" method="post"><button type="submit" class="btn" style="background:#c62828" onclick="return confirm('Shut down the reader?')">Shut down</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Saves your place and powers off. Same as holding the GPIO button for 3 s.</p></div>
@@ -174,6 +176,7 @@ def index():
         downloads=downloads,
         downloads_total=format_file_size(sum(d["size"] for d in downloads)),
         kosync=_kosync_view(),
+        reader_settings=_settings_view(),
     )
 
 
@@ -182,6 +185,34 @@ def _kosync_view():
 
     s = kosync.load_settings() or {}
     return {"url": s.get("url", ""), "user": s.get("user", ""), "configured": bool(s)}
+
+
+def _settings_view():
+    import settings as sm
+
+    st = sm.Settings()
+    return [{"key": k, "label": sm.SPEC[k][0], "value": str(st.get(k)),
+             "options": [(str(v), sm.describe(k, v)) for v in sm.choices(k)]}
+            for k in sm.ORDER]
+
+
+@app.route("/settings", methods=["POST"])
+def save_settings():
+    import settings as sm
+
+    st = sm.Settings()
+    for k in sm.ORDER:
+        raw = request.form.get(k)
+        if raw is None:
+            continue
+        match = next((v for v in sm.choices(k) if str(v) == raw), None)
+        if match is None:
+            flash(f"Invalid value for {sm.SPEC[k][0]}", "error")
+            return redirect(url_for("index"))
+        if match != st.get(k):
+            st.set(k, match)
+    flash("Settings saved", "success")
+    return redirect(url_for("index"))
 
 
 @app.route("/kosync", methods=["POST"])

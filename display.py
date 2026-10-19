@@ -9,6 +9,8 @@ from config import (
     DISPLAY_ROTATION,
     DISPLAY_WIDTH,
     FONT_CANDIDATES,
+    FONT_FACES,
+    FONTS_DIR,
     MOCK_DISPLAY_PATH,
     PARTIAL_REFRESH_LIMIT,
 )
@@ -29,12 +31,35 @@ def new_draw(image):
     return draw
 
 
-def load_font(size):
-    """Load the first available font from FONT_CANDIDATES at the given size."""
-    if size in _font_cache:
-        return _font_cache[size]
+def available_fonts():
+    """{name: path} of usable fonts: built-in faces plus anything in fonts/."""
+    faces = {}
+    for name, candidates in FONT_FACES.items():
+        path = next((p for p in candidates if p and os.path.exists(p)), None)
+        if path:
+            faces[name] = path
+    if os.path.isdir(FONTS_DIR):
+        for f in sorted(os.listdir(FONTS_DIR)):
+            stem, ext = os.path.splitext(f)
+            if ext.lower() in (".ttf", ".otf") and f != "LiberationMono-Regular.ttf":
+                faces.setdefault(stem, os.path.join(FONTS_DIR, f))
+    return faces
+
+
+def load_font(size, face=None):
+    """Font `face` (a name from available_fonts) at `size`; falls back to Mono,
+    then Pillow's built-in font."""
+    key = (size, face)
+    if key in _font_cache:
+        return _font_cache[key]
+    paths = []
+    if face:
+        p = available_fonts().get(face)
+        if p:
+            paths.append(p)
+    paths += FONT_CANDIDATES
     font = None
-    for path in FONT_CANDIDATES:
+    for path in paths:
         if path and os.path.exists(path):
             try:
                 font = ImageFont.truetype(path, size)
@@ -47,7 +72,7 @@ def load_font(size):
             font = ImageFont.load_default(size)  # Pillow >= 10.1
         except TypeError:
             font = ImageFont.load_default()
-    _font_cache[size] = font
+    _font_cache[key] = font
     return font
 
 

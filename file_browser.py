@@ -4,7 +4,7 @@ import os
 from typing import List, Optional, Tuple
 
 from cloud import KOODO_FILE
-from config import CLOUD_LABEL, SHOW_CLOUD_ON_HOME, SUPPORTED_EXTENSIONS
+from config import CLOUD_LABEL, SETTINGS_LABEL, SHOW_CLOUD_ON_HOME, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ PARENT = ".."  # pseudo-entry at the top of every subfolder
 class FileBrowser:
     """Directory navigation plus per-book reading progress."""
 
-    def __init__(self, root_path: str, state_file: str, cloud=None):
+    def __init__(self, root_path: str, state_file: str, cloud=None, show_settings=False):
         self.root_path = os.path.abspath(root_path)
         self.state_file = state_file
         self.cloud = cloud  # optional CloudSource
@@ -22,6 +22,7 @@ class FileBrowser:
         self.items: List[Tuple[str, bool]] = []
         self.remote_only = set()  # names in the current cloud folder not downloaded yet
         self.cloud_offline = False
+        self.show_settings = show_settings
         self.cursor_position = 0
         self._listing_signature = None
         os.makedirs(self.root_path, exist_ok=True)
@@ -122,7 +123,8 @@ class FileBrowser:
             top.append((PARENT, True))
         elif self.cloud is not None and self.cloud.enabled():
             top.append((CLOUD_LABEL, True))
-        return top + sorted(dirs, key=key) + sorted(files, key=key)
+        bottom = [(SETTINGS_LABEL, False)] if self.is_root() and self.show_settings else []
+        return top + sorted(dirs, key=key) + sorted(files, key=key) + bottom
 
     def _refresh(self, keep: Optional[str] = None, force_remote: bool = False) -> None:
         self.items = self._scan(force_remote)
@@ -184,6 +186,16 @@ class FileBrowser:
         """Put the cursor on path if it's listed in the current folder."""
         for i, (name, _) in enumerate(self.items):
             if os.path.join(self.current_path, name) == path:
+                self.cursor_position = i
+                return True
+        return False
+
+    def selected_name(self) -> Optional[str]:
+        return self.items[self.cursor_position][0] if self.items else None
+
+    def select_name(self, name: str) -> bool:
+        for i, (n, _) in enumerate(self.items):
+            if n == name:
                 self.cursor_position = i
                 return True
         return False

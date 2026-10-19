@@ -62,6 +62,9 @@ BUSY    → Pin 18 (GPIO24)
 - **Cloud folder (WebDAV)**: browse a Nextcloud/WebDAV folder from the reader; a book downloads
   when you open it (marked with ↓ until then; a progress bar shows while it downloads and a long press cancels), then shows up on the home page too and works offline
 - **Reading progress sync with Koodo Reader / KOReader** (EPUB) over the KOReader sync protocol
+- **Settings** (on the reader: `[Settings]` at the bottom of the home screen; or the web UI):
+  font (Mono / Sans / Serif, plus any .ttf/.otf in `fonts/`), text size, and how often book
+  pages and menus do a full refresh
 - **Web UI** on port 5000 for uploading/deleting books, removing downloaded cloud copies, setting the screensaver, and shutting down
 
 ---

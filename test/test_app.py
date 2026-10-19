@@ -12,7 +12,7 @@ import main
 
 @pytest.fixture
 def app(monkeypatch):
-    shutil.rmtree(config.BASE_DIR, ignore_errors=True)
+    shutil.rmtree(config.BASE_DIR, ignore_errors=True)  # also resets settings.json
     os.makedirs(config.LIBRARY_PATH)
     with open(os.path.join(config.LIBRARY_PATH, "book.txt"), "w") as f:
         f.write("\n\n".join(f"Paragraph number {i} with some words." for i in range(200)))
@@ -139,7 +139,7 @@ def test_partial_refresh_only_in_file_list(app):
 
 
 def test_book_partial_refresh_setting(app, monkeypatch):
-    monkeypatch.setattr(main, "BOOK_FULL_REFRESH_EVERY", 3)
+    app.settings.set("book_full_refresh_every", 3)
     act(app, "next", "long")
     assert app.display.last_refresh == "full"  # opening is always full
     seen = []
@@ -226,3 +226,72 @@ def test_back_from_book_in_subfolder_goes_home(app):
     assert app.mode == main.AppMode.READER
     act(app, "long")
     assert app.browser.is_root()
+
+
+def test_settings_screen(app):
+    # [Settings] is the last entry on the home screen.
+    assert app.browser.get_items_for_display()[-1][0] == config.SETTINGS_LABEL
+    act(app, "prev", "long")
+    assert app.mode == main.AppMode.SETTINGS
+    assert app.display.last_refresh == "full"
+
+    # Row 0: font. Long press cycles it and applies immediately.
+    before = app.settings.get("font")
+    act(app, "long")
+    assert app.settings.get("font") != before
+    assert app.reader.face == app.settings.get("font")
+
+    # Row 1: text size.
+    act(app, "next", "long")
+    assert app.settings.get("font_size") == 13
+    assert app.reader.font_size == 13 and app.font_size == 13
+    assert app.display.last_refresh == "partial"
+
+    # Persisted for the next boot.
+    assert main.Application(mock=True).settings.get("font_size") == 13
+
+    # Back (last row) returns home with the cursor on [Settings].
+    while app.settings_cursor != app.BACK_ROW:
+        act(app, "next")
+    act(app, "long")
+    assert app.mode == main.AppMode.BROWSER and app.browser.is_root()
+    assert app.browser.selected_name() == config.SETTINGS_LABEL
+
+
+def test_font_change_keeps_reading_position(app):
+    with open(os.path.join(config.LIBRARY_PATH, "book.txt"), "a") as f:
+        f.write("\n\n" + "\n\n".join("Extra paragraph %d with words." % i for i in range(400)))
+    act(app, "next", "long")
+    for _ in range(20):
+        act(app, "next")
+    pos = app.reader.get_position()
+    # Change size from the web UI while reading.
+    import webui
+    webui.app.test_client().post("/settings", data={"font_size": "16"})
+    app._render()
+    assert app.reader.font_size == 16
+    start = app.reader.page_starts[app.reader.current_page]
+    end = app.reader.page_starts[app.reader.current_page + 1]
+    assert start <= tuple(pos) < end
+
+
+def test_menu_refresh_limit_from_settings(app):
+    app.settings.set("menu_full_refresh_every", 5)
+    seen = []
+    act(app, "next")  # first move after a full frame
+    for _ in range(7):
+        act(app, "next")
+        seen.append(app.display.last_refresh)
+    assert "full" in seen and seen.count("partial") >= 4
+
+
+def test_settings_shutdown_needs_confirmation(app):
+    act(app, "prev", "long")  # open Settings
+    while app.settings_cursor != app.SHUTDOWN_ROW:
+        act(app, "next")
+    act(app, "long")
+    assert app.confirm_shutdown and app.actions.empty()
+    act(app, "next")  # moving away cancels
+    assert not app.confirm_shutdown
+    act(app, "prev", "long", "long")
+    assert app.actions.get_nowait() == "shutdown"

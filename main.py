@@ -24,7 +24,7 @@ from PIL import Image
 
 from button import ButtonHandler
 from config import (
-    BOOK_FULL_REFRESH_EVERY,
+    SETTINGS_LABEL,
     BUSY_DELAY,
     DOWNLOAD_REDRAW_SECONDS,
     CACHE_DIR,
@@ -38,7 +38,6 @@ from config import (
     MARGIN_LEFT,
     MARGIN_RIGHT,
     MARGIN_TOP,
-    PARTIAL_REFRESH_LIMIT,
     SHUTDOWN_COMMAND,
     WEBUI_PORT,
 )
@@ -49,6 +48,8 @@ from cloud import CloudSource
 from file_browser import FileBrowser
 from pdf_reader import PDFReader
 from reader import TextReader, cached_battery
+import settings as settings_mod
+from documents import file_key
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class AppMode(Enum):
     BROWSER = "browser"
     READER = "reader"  # reflowed text: txt, md, epub, text PDFs
     PDF_IMAGE = "pdf_image"  # rasterized PDF pages
+    SETTINGS = "settings"
 
 
 def local_ip():
@@ -82,15 +84,18 @@ class Application:
     def __init__(self, mock=False):
         self.display = EPaperDisplay(mock=mock)
         self.cloud = CloudSource(LIBRARY_PATH)
-        self.browser = FileBrowser(LIBRARY_PATH, STATE_FILE, cloud=self.cloud)
+        self.browser = FileBrowser(LIBRARY_PATH, STATE_FILE, cloud=self.cloud,
+                                   show_settings=True)
         self.sync = SyncWorker()
         self.doc_id = None  # KOReader document hash of the open EPUB
         self._remote_applied = None
         self._last_screen = None  # (mode, file) on the panel; None after a message/screensaver
+        self.settings = settings_mod.Settings()
+        self.settings_cursor = 0
+        self.confirm_shutdown = False
         self.reader = TextReader(font_size=FONT_SIZE)
         self.pdf_reader = PDFReader(cache_dir=CACHE_DIR)
-        self.font = load_font(FONT_SIZE)
-        self.small_font = load_font(10)
+        self._apply_settings()
 
         self.mode = AppMode.BROWSER
         self.current_file = None
@@ -159,6 +164,8 @@ class Application:
                 return
             if self.mode == AppMode.BROWSER:
                 self._browser_action(action)
+            elif self.mode == AppMode.SETTINGS:
+                self._settings_action(action)
             else:
                 self._reader_action(action)
         # Skip the (slow) refresh when nothing visible changed.
@@ -166,6 +173,9 @@ class Application:
             self._render()
 
     def _view_state(self):
+        if self.mode == AppMode.SETTINGS:
+            return (self.mode, self.settings_cursor, self.confirm_shutdown,
+                    tuple(self.settings.get(k) for k in settings_mod.ORDER))
         if self.mode == AppMode.BROWSER:
             items = tuple(self.browser.get_items_for_display())
             return (self.mode, self.browser.get_current_dir(), self.browser.get_cursor_position(), items, self.notice)
@@ -180,7 +190,10 @@ class Application:
             path = self.browser.get_selected_path()
             if not path:
                 return
-            if self.browser.selected_is_parent():
+            if self.browser.selected_name() == SETTINGS_LABEL and self.browser.is_root():
+                self.mode = AppMode.SETTINGS
+                self.settings_cursor = 0
+            elif self.browser.selected_is_parent():
                 self.browser.go_up()
             elif self.browser.selected_is_remote():
                 if self._download(path):
@@ -193,6 +206,87 @@ class Application:
                     self.browser.enter(path)
             else:
                 self._open(path)
+
+    # --- settings ----------------------------------------------------------
+
+    def _apply_settings(self):
+        """(Re)build fonts and the reader from the current settings, keeping
+        the reading position if a book is open."""
+        face, size = self.settings.get("font"), self.settings.get("font_size")
+        self.font_size = size
+        self.font = load_font(size, face)
+        self.small_font = load_font(10, face)
+        old = self.reader
+        if (old.face, old.font_size) == (face, size) and old.book is not None:
+            return
+        self.reader = TextReader(font_size=size, face=face, cache_dir=CACHE_DIR)
+        if old.book is not None and self.current_file and self.mode == AppMode.READER:
+            pos = old.get_position()
+            with self._busy("Re-flowing text..."):
+                self.reader.load_book(old.book, old.title, cache_key=self._cache_key(self.current_file))
+            self.reader.set_position(pos)
+
+    def _cache_key(self, path):
+        try:
+            return file_key(path)
+        except OSError:
+            return None
+
+    SHUTDOWN_ROW = len(settings_mod.ORDER)
+    BACK_ROW = SHUTDOWN_ROW + 1
+
+    def _settings_action(self, action):
+        rows = self.BACK_ROW + 1
+        confirming, self.confirm_shutdown = self.confirm_shutdown, False
+        if action == "next":
+            self.settings_cursor = (self.settings_cursor + 1) % rows
+        elif action == "prev":
+            self.settings_cursor = (self.settings_cursor - 1) % rows
+        elif action in ("long", "triple"):
+            if self.settings_cursor == self.SHUTDOWN_ROW:
+                if confirming:
+                    self.actions.put("shutdown")
+                else:
+                    self.confirm_shutdown = True  # ask once more
+                return
+            if self.settings_cursor == self.BACK_ROW:
+                self.mode = AppMode.BROWSER
+                self.browser.go_home()
+                self.browser.select_name(SETTINGS_LABEL)
+                return
+            key = settings_mod.ORDER[self.settings_cursor]
+            self.settings.cycle(key)
+            if key in ("font", "font_size"):
+                self._apply_settings()
+
+    def _render_settings(self):
+        img = self.display.create_canvas()
+        draw = new_draw(img)
+        draw.text((MARGIN_LEFT, 1), "Settings", fill=0, font=self.small_font)
+        draw.text((DISPLAY_WIDTH - MARGIN_RIGHT
+                   - draw.textlength("long press: change", font=self.small_font), 1),
+                  "long press: change", fill=0, font=self.small_font)
+        draw.line([(0, 12), (DISPLAY_WIDTH, 12)], fill=0)
+        rows = [f"{settings_mod.SPEC[k][0]}: {settings_mod.describe(k, self.settings.get(k))}"
+                for k in settings_mod.ORDER]
+        rows += ["Shut down? Long press again" if self.confirm_shutdown else "Shut down", "Back"]
+        # Same face as the books, but capped in size so values always fit.
+        size = min(self.font_size, 12)
+        font = load_font(size, self.settings.get("font"))
+        line_h = size + 3
+        y = 14
+        width = DISPLAY_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
+        per_screen = (DISPLAY_HEIGHT - y) // line_h  # scroll at big text sizes
+        start = max(0, min(self.settings_cursor - per_screen // 2, len(rows) - per_screen))
+        for i, label in list(enumerate(rows))[start:start + per_screen]:
+            while draw.textlength(label, font=font) > width:
+                label = label[:-1]
+            if i == self.settings_cursor:
+                draw.rectangle([(0, y - 1), (DISPLAY_WIDTH, y + line_h - 2)], fill=0)
+            draw.text((MARGIN_LEFT, y), label, fill=255 if i == self.settings_cursor else 0,
+                      font=font)
+            y += line_h
+        return img
 
     def _download(self, path):
         """Fetch a cloud book into the local mirror, showing a progress bar.
@@ -258,7 +352,7 @@ class Application:
         y = 8
         for line in self.reader._wrap(f"Downloading {title}")[:2]:
             draw.text((MARGIN_LEFT, y), line, fill=0, font=self.font)
-            y += FONT_SIZE + 2
+            y += self.font_size + 2
         bar_top, bar_h = 62, 14
         left, right = MARGIN_LEFT, DISPLAY_WIDTH - MARGIN_RIGHT
         draw.rectangle([(left, bar_top), (right, bar_top + bar_h)], outline=0)
@@ -349,7 +443,8 @@ class Application:
                     self.current_file = None
                     return False
                 if book.total_chars > 1 or not is_pdf:
-                    self.reader.load_book(book, title=os.path.basename(path))
+                    self.reader.load_book(book, title=os.path.basename(path),
+                                          cache_key=self._cache_key(path))
                     ok = True
                 else:
                     logger.info("PDF has no text layer, using page images")
@@ -542,11 +637,11 @@ class Application:
         img = self.display.create_canvas()
         draw = new_draw(img)
         lines = [l for part in (text or "").split("\n") for l in self.reader._wrap(part)]
-        y = (DISPLAY_HEIGHT - len(lines) * (FONT_SIZE + 2)) // 2
+        y = (DISPLAY_HEIGHT - len(lines) * (self.font_size + 2)) // 2
         for line in lines:
             w = draw.textlength(line, font=self.font)
             draw.text(((DISPLAY_WIDTH - w) // 2, y), line, fill=0, font=self.font)
-            y += FONT_SIZE + 2
+            y += self.font_size + 2
         self.display.show(img, partial=partial)
         self._last_screen = None
 
@@ -554,12 +649,18 @@ class Application:
         # Partial refresh for moving around the file list, and for page turns
         # if BOOK_FULL_REFRESH_EVERY > 1. Any screen change (opening a book,
         # going back, a message) is a full refresh.
+        if self.settings.changed_on_disk():  # saved from the web UI
+            self._apply_settings()
         screen = (self.mode, self.current_file)
         partial = screen == self._last_screen
+        menu_limit = self.settings.get("menu_full_refresh_every")
         if self.mode == AppMode.BROWSER:
-            img, limit = self._render_browser(), PARTIAL_REFRESH_LIMIT
+            img, limit = self._render_browser(), menu_limit
+        elif self.mode == AppMode.SETTINGS:
+            img, limit = self._render_settings(), menu_limit
         else:
-            img, limit = self._active_reader().render(), BOOK_FULL_REFRESH_EVERY - 1
+            img = self._active_reader().render()
+            limit = self.settings.get("book_full_refresh_every") - 1
         self.display.show(img, dither=self.mode == AppMode.PDF_IMAGE,
                           partial=partial, limit=limit)
         self._last_screen = screen
@@ -591,10 +692,10 @@ class Application:
             y = header_h + 8
             for line in self.reader._wrap(msg):
                 draw.text((MARGIN_LEFT, y), line, fill=0, font=self.font)
-                y += FONT_SIZE + 2
+                y += self.font_size + 2
             return img
 
-        line_h = FONT_SIZE + 3
+        line_h = self.font_size + 3
         per_screen = (DISPLAY_HEIGHT - header_h - MARGIN_TOP) // line_h
         cursor = self.browser.get_cursor_position()
         start = max(0, min(cursor - per_screen // 2, len(items) - per_screen))

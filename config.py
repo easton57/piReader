@@ -16,6 +16,7 @@ PARTIAL_REFRESH_LIMIT = 15
 # Book pages: full refresh every N page turns, partial in between.
 # 1 = every page is a full refresh (cleanest text); e.g. 5 = 4 fast turns, then a full one.
 BOOK_FULL_REFRESH_EVERY = 1
+SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
 DISPLAY_WIDTH = 250
 DISPLAY_HEIGHT = 122
 # Rotation applied before sending to the panel (depends on how the HAT is mounted).
@@ -33,7 +34,19 @@ FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
 ]
+# Font choices in Settings: first existing file per name. Any .ttf/.otf you
+# drop into fonts/ is offered too (named after the file).
+FONT_FACES = {
+    "Mono": FONT_CANDIDATES,
+    "Sans": ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"],
+    "Serif": ["/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+              "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"],
+}
+# Defaults; Settings (on the reader or in the web UI) override these.
+FONT_FACE = "Mono"
 FONT_SIZE = 12  # reading text and file list; 10 fits more, 13+ gets cramped
+FONT_SIZES = [10, 11, 12, 13, 14, 16]
 FILES_PER_SCREEN = 8
 
 LIBRARY_PATH = os.path.join(BASE_DIR, "library")
@@ -69,6 +82,7 @@ SHUTDOWN_COMMAND = "sudo -n systemctl poweroff"
 WEBDAV_SETTINGS_FILE = os.path.join(BASE_DIR, "webdav.json")
 WEBDAV_TIMEOUT = 8
 CLOUD_LABEL = "[Cloud]"
+SETTINGS_LABEL = "[Settings]"
 # Also list downloaded cloud books on the home page, next to local ones.
 SHOW_CLOUD_ON_HOME = True
 # Download progress bar: redraw (partial refresh) at most this often.
