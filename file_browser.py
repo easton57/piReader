@@ -112,7 +112,7 @@ class FileBrowser:
                         remote_only.add(name)
         self.remote_only = remote_only
 
-        key = lambda item: item[0].lower()
+        key = lambda item: self.label(item[0]).lower()
         top = []
         if self.current_path != self.root_path:
             top.append((PARENT, True))
@@ -156,6 +156,14 @@ class FileBrowser:
         if name == CLOUD_LABEL and self.current_path == self.root_path and self.cloud:
             return self.cloud.mirror_root
         return os.path.join(self.current_path, name)
+
+    def label(self, name: str) -> str:
+        """Display name: Koodo's book title for its numbered files, else the filename."""
+        if self.in_cloud():
+            title = self.cloud.title_for(self.current_path, name)
+            if title:
+                return title
+        return name
 
     def selected_is_dir(self) -> bool:
         return bool(self.items) and self.items[self.cursor_position][1]

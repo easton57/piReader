@@ -161,3 +161,49 @@ def test_webui_cloud_settings(server):
     assert b"Connected" in r.data and PASSWORD.encode() not in r.data
     client.post("/cloud", data={"url": ""})
     assert not os.path.exists(config.WEBDAV_SETTINGS_FILE)
+
+
+def make_koodo_tree(root):
+    """KoodoReader/{book/<key>.epub, config/books.db} as Koodo writes it to WebDAV."""
+    import sqlite3
+
+    (root / "KoodoReader" / "book").mkdir(parents=True)
+    (root / "KoodoReader" / "config").mkdir()
+    (root / "KoodoReader" / "book" / "1779244646577.epub").write_text("x")
+    (root / "KoodoReader" / "book" / "1779244699999.epub").write_text("y")
+    con = sqlite3.connect(root / "KoodoReader" / "config" / "books.db")
+    con.execute('CREATE TABLE "books" ("key" text PRIMARY KEY, "name" text, "author" text,'
+                ' "description" text, "md5" text, "cover" text, "format" text,'
+                ' "publisher" text, "size" integer, "page" integer, "path" text, "charset" text)')
+    con.executemany("INSERT INTO books (key, name, author, format) VALUES (?, ?, ?, ?)", [
+        ("1779244646577", "Moby-Dick", "Herman Melville", "EPUB"),
+        ("1779244699999", "Anathem", "", "EPUB"),
+    ])
+    con.commit()
+    con.close()
+
+
+@pytest.mark.parametrize("subpath,enter", [("KoodoReader/book", []), ("KoodoReader", ["book"])])
+def test_koodo_titles(server, tmp_path, subpath, enter):
+    make_koodo_tree(server["root"] / "Books")
+    fb, cloud = make_browser(tmp_path, f"{server['url']}/{subpath}")
+    cloud.cache_dir = str(tmp_path / "cache")
+    fb.enter(cloud.mirror_root)
+    for d in enter:
+        fb.enter(os.path.join(fb.get_current_dir(), d))
+    labels = [fb.label(n) for n, _ in fb.get_items_for_display()]
+    # Sorted by title, not by key.
+    assert labels == ["..", "Anathem", "Moby-Dick - Herman Melville"]
+
+    # Titles still show offline from the cached books.db.
+    cloud._titles.clear()
+    shutil.rmtree(server["root"] / "Books" / "KoodoReader" / "config")
+    assert fb.label("1779244646577.epub") == "Moby-Dick - Herman Melville"
+
+
+def test_non_koodo_folder_untouched(server, tmp_path):
+    fb, cloud = make_browser(tmp_path, server["url"])
+    cloud.cache_dir = str(tmp_path / "cache")
+    fb.enter(cloud.mirror_root)
+    assert fb.label("Dune & Co.txt") == "Dune & Co.txt"
+    assert not os.path.exists(cloud.cache_dir)  # never fetched a books.db

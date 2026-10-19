@@ -188,7 +188,7 @@ class Application:
         """Fetch a cloud book into the local mirror. Returns True on success."""
         from webdav import WebDAVError
 
-        name = os.path.basename(path)
+        name = self.browser.label(os.path.basename(path))
         self._show_message(f"Downloading {name}...")
         try:
             self.cloud.download(path)
@@ -447,7 +447,9 @@ class Application:
         remote = self.browser.remote_only
         for i in range(start, min(len(items), start + per_screen)):
             name, is_dir = items[i]
-            label = name + "/" if is_dir and name not in ("..", CLOUD_LABEL) else name
+            label = self.browser.label(name)
+            if is_dir and name not in ("..", CLOUD_LABEL):
+                label += "/"
             is_remote = name in remote and not is_dir
             avail = width - 10 if is_remote else width
             if draw.textlength(label, font=self.font) > avail:

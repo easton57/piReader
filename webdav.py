@@ -140,7 +140,18 @@ class WebDAVClient:
 
     def download(self, rel, dest, progress=None):
         """Stream a remote file to dest (atomically). progress(done, total) optional."""
-        resp = self._request("GET", self._url(rel))
+        return self._download_url(self._url(rel), dest, progress)
+
+    def download_sibling(self, rel, dest):
+        """Download a path relative to the base folder that may climb above it
+        (e.g. "../config/books.db"), resolved against the server path."""
+        parts = urllib.parse.urlsplit(self.base_url)
+        path = posixpath.normpath(posixpath.join(parts.path, rel))
+        quoted = "/".join(urllib.parse.quote(p) for p in path.split("/"))
+        return self._download_url(f"{parts.scheme}://{parts.netloc}{quoted}", dest)
+
+    def _download_url(self, url, dest, progress=None):
+        resp = self._request("GET", url)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         part = dest + ".part"
         total = int(resp.headers.get("Content-Length") or 0) or None

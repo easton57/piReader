@@ -119,6 +119,11 @@ Books go in `library/` (copy them in, or upload at `http://<pi-ip>:5000`).
 `https://<host>/remote.php/dav/files/<user>/<folder>` with an app password. They're stored in
 `webdav.json` (mode 600, gitignored). Downloads go to `library/.cloud/`.
 
+Pointing it at Koodo Reader's own WebDAV folder (`.../KoodoReader/book` or `.../KoodoReader`) works:
+Koodo names files by number (`1779244646577.epub`), so piReader reads Koodo's
+`KoodoReader/config/books.db` (read-only) and shows "Title - Author" instead. Those are the same
+files Koodo reads, so progress sync matches them automatically.
+
 **Progress sync (Koodo Reader / KOReader):** set a KOReader sync server in the web UI. Use the
 public `https://sync.koreader.rocks` or self-host one (e.g. kosync / korrosync in Docker); tick
 "Create this account" the first time. Put the same server and login into Koodo
