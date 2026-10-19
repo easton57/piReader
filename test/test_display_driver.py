@@ -93,3 +93,23 @@ def test_tricolour_driver_no_red(fake_panel, monkeypatch):
     black, red = [b for k, b in fake_panel if k == "bulk"]
     assert len(black) == len(red) == 16 * 250
     assert set(red) == {0xFF}
+
+
+@pytest.mark.parametrize("bg,expected", [(10, 0), (245, 255), (128, 128)])
+def test_screensaver_bars_match_background(bg, expected):
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (400, 400), (bg, bg, bg))  # square: bars left and right
+    ImageDraw.Draw(img).ellipse([100, 100, 300, 300], fill=(255 - bg,) * 3)
+    out = display_mod.fit_screensaver(img)
+    assert out.size == (250, 122)
+    assert out.getpixel((2, 60)) == expected and out.getpixel((247, 60)) == expected
+
+
+def test_screensaver_transparent_png_uses_opaque_edge():
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGBA", (300, 300), (0, 0, 0, 0))
+    ImageDraw.Draw(img).rectangle([20, 20, 280, 280], fill=(20, 20, 20, 255))
+    out = display_mod.fit_screensaver(img)
+    assert out.getpixel((2, 2)) == 0  # dark art on transparency -> dark fill

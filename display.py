@@ -51,6 +51,48 @@ def load_font(size):
     return font
 
 
+def border_tone(gray, alpha=None):
+    """Median grey of the image's outer edge (ignoring transparent pixels)."""
+    w, h = gray.size
+    px, a = gray.load(), alpha.load() if alpha else None
+    edge = [(x, y) for x in range(w) for y in (0, h - 1)] + \
+           [(x, y) for y in range(1, h - 1) for x in (0, w - 1)]
+    values = sorted(px[x, y] for x, y in edge if a is None or a[x, y] > 127)
+    if not values:
+        return 255
+    tone = values[len(values) // 2]
+    # Snap near-black/near-white so the fill is solid rather than dithered dots.
+    return 0 if tone < 64 else 255 if tone > 192 else tone
+
+
+def fit_screensaver(image, size=None):
+    """Scale an image to fit the screen and fill the leftover bars with the
+    image's own background tone (dark art gets dark bars, not white)."""
+    size = size or (WIDTH, HEIGHT)
+    has_alpha = image.mode in ("RGBA", "LA") or "transparency" in image.info
+    if has_alpha:
+        rgba = image.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        gray = rgba.convert("L")
+    else:
+        alpha, gray = None, image.convert("L")
+    if alpha is not None:
+        # Sample the edge of the visible content, not the transparent margin.
+        bbox = alpha.point(lambda a: 255 if a > 127 else 0).getbbox() or (0, 0, *gray.size)
+        tone = border_tone(gray.crop(bbox), alpha.crop(bbox))
+    else:
+        tone = border_tone(gray)
+    if alpha is not None:  # transparent areas take the background tone too
+        gray = Image.composite(gray, Image.new("L", gray.size, tone), alpha)
+    gray.thumbnail(size, Image.LANCZOS)
+    # Snap near-black/near-white inside the image too; otherwise dithering
+    # sprinkles dots over a "black" background and a box shows against the bars.
+    gray = gray.point(lambda p: 0 if p < 48 else 255 if p > 208 else p)
+    canvas = Image.new("L", size, tone)
+    canvas.paste(gray, ((size[0] - gray.width) // 2, (size[1] - gray.height) // 2))
+    return canvas
+
+
 class EPaperDisplay:
     """Wrapper for the Waveshare 2.13" panels (see DISPLAY_DRIVER in config).
 

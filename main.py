@@ -40,7 +40,7 @@ from config import (
     SHUTDOWN_COMMAND,
     WEBUI_PORT,
 )
-from display import EPaperDisplay, load_font, new_draw
+from display import EPaperDisplay, fit_screensaver, load_font, new_draw
 from documents import load_book, load_text
 from kosync import SyncWorker, partial_md5
 from cloud import CloudSource
@@ -496,10 +496,8 @@ class Application:
         if not path:
             return False
         try:
-            img = Image.open(path).convert("L")
-            img.thumbnail((DISPLAY_WIDTH, DISPLAY_HEIGHT), Image.LANCZOS)
-            canvas = self.display.create_canvas()
-            canvas.paste(img, ((DISPLAY_WIDTH - img.width) // 2, (DISPLAY_HEIGHT - img.height) // 2))
+            with Image.open(path) as img:
+                canvas = fit_screensaver(img)
             self.display.show(canvas, dither=True)
             self._last_screen = None
             return True
