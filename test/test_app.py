@@ -351,3 +351,17 @@ def test_auto_power_off_never(app, monkeypatch):
     app.last_activity = time.monotonic() - 10 * 3600
     app._check_idle()
     assert calls == []
+
+
+def test_open_restarts_idle_clock(app, monkeypatch):
+    """Time spent loading a book must not count towards the sleep timer."""
+    real_open_doc = app._open_doc
+
+    def slow_open(path):
+        app.last_activity = time.monotonic() - 10 * 3600  # as if loading took hours
+        return real_open_doc(path)
+
+    monkeypatch.setattr(app, "_open_doc", slow_open)
+    act(app, "next", "long")
+    assert app.mode == main.AppMode.READER
+    assert time.monotonic() - app.last_activity < 5

@@ -197,8 +197,9 @@ class Application:
             elif self.browser.selected_is_parent():
                 self.browser.go_up()
             elif self.browser.selected_is_remote():
-                if self._download(path):
-                    self._open(path)
+                with self._idle_paused():  # slow downloads shouldn't eat the sleep timer
+                    if self._download(path):
+                        self._open(path)
             elif self.browser.selected_is_dir():
                 if self.cloud.contains(path):
                     with self._busy("Loading Cloud..."):
@@ -417,12 +418,22 @@ class Application:
             done.set()
             t.join()  # never let the busy screen and the next render touch SPI together
 
+    @contextlib.contextmanager
+    def _idle_paused(self):
+        """Time spent in the wrapped work doesn't count towards the idle/sleep
+        timers: the clock restarts when it finishes, even on failure."""
+        try:
+            yield
+        finally:
+            self.last_activity = time.monotonic()
+
     def _open(self, path):
         """Open a document, restoring its saved page. Returns True on success."""
-        if path.lower().endswith(".pdf"):
-            return self._open_doc(path)  # has its own cancellable "Opening" screen
-        with self._busy(f"Opening {self.browser.label(os.path.basename(path))}..."):
-            return self._open_doc(path)
+        with self._idle_paused():
+            if path.lower().endswith(".pdf"):
+                return self._open_doc(path)  # has its own cancellable "Opening" screen
+            with self._busy(f"Opening {self.browser.label(os.path.basename(path))}..."):
+                return self._open_doc(path)
 
     def _open_doc(self, path):
         progress = self.browser.get_progress(path)
