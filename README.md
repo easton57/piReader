@@ -10,7 +10,7 @@ A tiny e-ink reader powered by a Raspberry Pi! 📚⚡
 
 Think of it as a tiny, dedicated reading machine that:
 - 📖 Reads your personal ebook library
-- 🔋 Runs on a PiSugar battery
+- 🔋 Runs on a PiSugar battery, powers itself off when idle
 - 🌐 Has a built-in web UI for uploading books
 - ⭐ Remembers where you left off
 
@@ -106,7 +106,8 @@ venv/bin/pip install -r requirements.txt
 venv/bin/python test/hardware_display_check.py   # should show "Display OK", no red
 ```
 
-4. Run on boot (the service file assumes `/home/pi/piReader`; edit it if yours differs):
+4. Run on boot. The service file assumes user `pi` and `/home/pi/piReader`; change `User=`
+   and the paths if yours differ.
 
 ```bash
 sudo cp ereader.service /etc/systemd/system/
@@ -114,8 +115,14 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ereader
 ```
 
-5 taps runs `sudo -n systemctl poweroff` (`SHUTDOWN_COMMAND` in `config.py`), so the
-service user needs passwordless sudo, which the default `pi` user has.
+5. **Power off:** let the service user power the Pi off (the reader runs
+   `sudo -n systemctl poweroff`). Without this, Shut down / auto power-off only shows
+   "Couldn't power off".
+
+```bash
+echo "pi ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff" | sudo tee /etc/sudoers.d/pireader
+sudo chmod 440 /etc/sudoers.d/pireader   # replace "pi" with your service user
+```
 
 Books go in `library/` (copy them in, or upload at `http://<pi-ip>:5000`).
 
@@ -149,6 +156,31 @@ public `https://sync.koreader.rocks` or self-host one (e.g. kosync / korrosync i
 - The Pi's clock decides "newer": it needs NTP (Wi-Fi) or the PiSugar RTC set.
 - txt/md/pdf aren't synced.
 Progress, PDF caches and the screensaver live in `cache/`.
+
+---
+
+## 🔋 Battery and power
+
+The Pi Zero can't suspend (Linux has no sleep mode for its chip), so "idle" still draws power:
+roughly 0.4–0.6 W, which a 1200 mAh PiSugar 2 runs for about 7–9 hours. To make a charge last:
+
+- **Auto power off** (Settings, default 15 min idle; skipped while plugged in). The e-ink keeps
+  showing the screensaver with no power. Press the PiSugar button to boot again; the last book
+  reopens at your page. Booting takes ~30–45 s on a Zero.
+- After the Pi halts, the PiSugar 2 should cut its output on its own (light-load shutoff).
+  If its LEDs stay lit a minute after shutdown, the halted Pi is still drawing ~20–30 mA.
+- One-time board tweaks (`/boot/firmware/config.txt` on Bookworm, `/boot/config.txt` on older):
+
+```
+dtparam=act_led_trigger=none      # activity LED off
+dtparam=act_led_activelow=on
+dtoverlay=disable-bt              # Bluetooth off
+arm_freq=700                      # optional: lower max clock (default 1000)
+```
+
+  and turn HDMI off at boot (saves ~20–25 mA): add `/usr/bin/tvservice -o` to
+  `/etc/rc.local` (legacy firmware) or append `video=HDMI-A-1:d` to `/boot/firmware/cmdline.txt` (KMS).
+- The reader itself avoids waking the CPU when idle (no fast polling loops).
 
 ---
 

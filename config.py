@@ -73,9 +73,17 @@ BUSY_DELAY = 0.6
 # Show the screensaver and put the panel to sleep after this many idle seconds.
 # 0 disables it.
 IDLE_TIMEOUT = 300
+# Power the Pi off after this many idle minutes (0 = never; also in Settings).
+# Skipped while the PiSugar is plugged in. Press the PiSugar button to turn it
+# back on; the last book reopens where you left it.
+AUTO_POWER_OFF_MINUTES = 15
 
-# Command run on shutdown (GPIO 3s hold or the web UI button). Empty string = just exit the app.
-SHUTDOWN_COMMAND = "sudo -n systemctl poweroff"
+# Tried in order until one works. The service user needs permission: see README
+# "Power off" (a one-line sudoers rule). Empty list = just exit the app.
+SHUTDOWN_COMMANDS = [
+    ["systemctl", "poweroff"],              # works as root / with a polkit rule
+    ["sudo", "-n", "systemctl", "poweroff"],
+]
 
 # WebDAV "Cloud" folder. Credentials are in this file (gitignored), set them
 # from the web UI. Downloads are kept in library/.cloud/ mirroring the server.

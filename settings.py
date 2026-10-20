@@ -6,6 +6,7 @@ import logging
 import os
 
 from config import (
+    AUTO_POWER_OFF_MINUTES,
     BOOK_FULL_REFRESH_EVERY,
     FONT_FACE,
     FONT_SIZE,
@@ -22,6 +23,7 @@ SPEC = {
     "font_size": ("Text size", FONT_SIZE, FONT_SIZES),
     "book_full_refresh_every": ("Book refresh", BOOK_FULL_REFRESH_EVERY, [1, 2, 3, 5, 8, 10]),
     "menu_full_refresh_every": ("Menu refresh", PARTIAL_REFRESH_LIMIT, [5, 10, 15, 20, 30]),
+    "auto_power_off": ("Auto power off", AUTO_POWER_OFF_MINUTES, [5, 10, 15, 30, 60, 0]),
 }
 ORDER = list(SPEC)
 
@@ -39,6 +41,8 @@ def describe(key, value):
         return "full every page" if value == 1 else f"full every {value} pages"
     if key == "menu_full_refresh_every":
         return f"full after {value} moves"
+    if key == "auto_power_off":
+        return "never" if value == 0 else f"after {value} min"
     if key == "font_size":
         return f"{value} px"
     return str(value)

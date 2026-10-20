@@ -254,3 +254,24 @@ def test_refresh_keeps_cursor(tmp_path):
     (lib / "a.txt").write_text("x")
     fb.refresh_if_changed()
     assert fb.get_selected_path().endswith("c.txt")
+
+
+def test_gpio_tap_fires_via_timer_thread_and_idles():
+    import threading
+    import time as t
+
+    h, fired = make_handler()
+    h.use_pisugar, h.gpio_pin = False, None
+    h.start()
+    try:
+        assert not h._taps_pending.is_set()  # nothing to poll while idle
+        h.feed("single", window=0.2)
+        deadline = t.monotonic() + 2
+        while not fired and t.monotonic() < deadline:
+            t.sleep(0.02)
+        assert fired == [1]
+        t.sleep(0.2)
+        assert not h._taps_pending.is_set()
+        assert any(th.name == "ButtonTimer" for th in threading.enumerate())
+    finally:
+        h.stop()

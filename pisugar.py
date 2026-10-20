@@ -34,3 +34,12 @@ def get_battery_percentage():
     except Exception as e:
         logger.debug(f"Battery query failed: {e}")
         return None
+
+
+def is_plugged_in():
+    """True if the PiSugar reports external power (charging). False if unknown."""
+    try:
+        return query("get battery_power_plugged").lower() == "true"
+    except Exception as e:
+        logger.debug(f"Power-plugged query failed: {e}")
+        return False

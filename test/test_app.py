@@ -17,7 +17,7 @@ def app(monkeypatch):
     with open(os.path.join(config.LIBRARY_PATH, "book.txt"), "w") as f:
         f.write("\n\n".join(f"Paragraph number {i} with some words." for i in range(200)))
     os.makedirs(os.path.join(config.LIBRARY_PATH, "Folder"))
-    monkeypatch.setattr(main, "SHUTDOWN_COMMAND", "")
+    monkeypatch.setattr(main, "SHUTDOWN_COMMANDS", [])
     a = main.Application(mock=True)
     a._render()
     return a
@@ -295,3 +295,59 @@ def test_settings_shutdown_needs_confirmation(app):
     assert not app.confirm_shutdown
     act(app, "prev", "long", "long")
     assert app.actions.get_nowait() == "shutdown"
+
+
+def test_failed_power_off_keeps_reader_running(app, monkeypatch):
+    monkeypatch.setattr(main, "SHUTDOWN_COMMANDS",
+                        [["sh", "-c", "echo 'sudo: a password is required' >&2; exit 1"]])
+    monkeypatch.setattr(app.display, "mock", False)  # take the real power-off path
+    monkeypatch.setattr(app.display, "show", lambda *a, **k: None)
+    messages = []
+    monkeypatch.setattr(app, "_show_message", lambda text, **k: messages.append(text))
+    app.running = True
+    app._shutdown()
+    assert app.running  # app stays up instead of silently exiting
+    assert "a password is required" in messages[-1]
+
+
+def test_power_off_success_stops(app, monkeypatch):
+    monkeypatch.setattr(main, "SHUTDOWN_COMMANDS", [["false"], ["true"]])  # falls through to 2nd
+    monkeypatch.setattr(app.display, "mock", False)
+    monkeypatch.setattr(app.display, "show", lambda *a, **k: None)
+    monkeypatch.setattr(app.display, "sleep", lambda: None)
+    app.running = True
+    app._shutdown()
+    assert not app.running
+
+
+def test_auto_power_off_after_idle(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "_shutdown", lambda **k: calls.append(k))
+    monkeypatch.setattr(main.pisugar, "is_plugged_in", lambda: False)
+    app.settings.set("auto_power_off", 15)
+    app.last_activity = time.monotonic() - 14 * 60
+    app._check_idle()
+    assert calls == [] and app.idle  # screensaver at 5 min, not off yet
+    app.last_activity = time.monotonic() - 15 * 60
+    app._check_idle()
+    assert calls == [{"show_screen": False}]  # screensaver already up
+
+
+def test_no_auto_power_off_while_charging(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "_shutdown", lambda **k: calls.append(k))
+    monkeypatch.setattr(main.pisugar, "is_plugged_in", lambda: True)
+    app.last_activity = time.monotonic() - 60 * 60
+    app._check_idle()
+    app._check_idle()
+    assert calls == []
+    assert app._idle_wait() == 60  # rechecks in 5 min; main loop sleeps, no 1 s spin
+
+
+def test_auto_power_off_never(app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "_shutdown", lambda **k: calls.append(k))
+    app.settings.set("auto_power_off", 0)
+    app.last_activity = time.monotonic() - 10 * 3600
+    app._check_idle()
+    assert calls == []

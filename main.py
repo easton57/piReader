@@ -38,18 +38,18 @@ from config import (
     MARGIN_LEFT,
     MARGIN_RIGHT,
     MARGIN_TOP,
-    SHUTDOWN_COMMAND,
+    SHUTDOWN_COMMANDS,
     WEBUI_PORT,
 )
-from display import EPaperDisplay, fit_screensaver, load_font, new_draw
-from documents import load_book, load_text
-from kosync import SyncWorker, partial_md5
+import pisugar
+import settings as settings_mod
 from cloud import CloudSource
+from display import EPaperDisplay, fit_screensaver, load_font, new_draw
+from documents import file_key, load_book, load_text
 from file_browser import FileBrowser
+from kosync import SyncWorker, partial_md5
 from pdf_reader import PDFReader
 from reader import TextReader, cached_battery
-import settings as settings_mod
-from documents import file_key
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,7 @@ class Application:
         self.settings = settings_mod.Settings()
         self.settings_cursor = 0
         self.confirm_shutdown = False
+        self._next_power_check = 0.0
         self.reader = TextReader(font_size=FONT_SIZE)
         self.pdf_reader = PDFReader(cache_dir=CACHE_DIR)
         self._apply_settings()
@@ -124,7 +125,7 @@ class Application:
         try:
             while self.running:
                 try:
-                    pending = [self.actions.get(timeout=1.0)]
+                    pending = [self.actions.get(timeout=self._idle_wait())]
                 except queue.Empty:
                     self._check_idle()
                     continue
@@ -586,29 +587,69 @@ class Application:
     # --- idle / shutdown -------------------------------------------------
 
     def _check_idle(self):
-        if IDLE_TIMEOUT <= 0 or self.idle:
-            return
-        if time.monotonic() - self.last_activity >= IDLE_TIMEOUT:
+        idle_for = time.monotonic() - self.last_activity
+        if IDLE_TIMEOUT > 0 and not self.idle and idle_for >= IDLE_TIMEOUT:
             logger.info("Idle, showing screensaver")
             self.idle = True
             self.sync.flush()
             self._show_screensaver()
             self.display.sleep()
+        minutes = self.settings.get("auto_power_off")
+        if minutes and idle_for >= minutes * 60 and time.monotonic() >= self._next_power_check:
+            if pisugar.is_plugged_in():
+                self._next_power_check = time.monotonic() + 300  # look again in 5 min
+                return
+            logger.info(f"Idle {minutes} min, powering off")
+            self._shutdown(show_screen=not self.idle)  # screensaver may already be up
 
-    def _shutdown(self):
+    def _idle_wait(self):
+        """How long the main loop can sleep before an idle deadline (fewer wakeups)."""
+        idle_for = time.monotonic() - self.last_activity
+        deadlines = []
+        if IDLE_TIMEOUT > 0 and not self.idle:
+            deadlines.append(IDLE_TIMEOUT - idle_for)
+        minutes = self.settings.get("auto_power_off")
+        if minutes:
+            deadlines.append(max(minutes * 60 - idle_for,
+                                 self._next_power_check - time.monotonic()))
+        return max(1.0, min(deadlines + [60.0]))
+
+    def _shutdown(self, show_screen=True):
         logger.info("Shutting down")
         self._save_progress()
         # Screen first so it's obvious something is happening, then finish syncing.
-        if not self._show_screensaver():
+        if show_screen and not self._show_screensaver():
             self._show_message("Powered off")
         self.sync.flush(timeout=5)
-        self.running = False
-        if SHUTDOWN_COMMAND and not self.display.mock:
+        if self.display.mock or not SHUTDOWN_COMMANDS:
+            self.running = False
+            return
+        error = self._power_off()
+        if error is None:
+            self.running = False  # the system is going down
             self.display.sleep()
+            return
+        # Don't just quit the app (that left the Pi on with a dead reader).
+        logger.error(f"Power off failed: {error}")
+        self.idle = False
+        self.last_activity = time.monotonic()
+        self._show_message("Couldn't power off.\n" + error + "\nSee README: Power off.")
+
+    @staticmethod
+    def _power_off():
+        """Try each SHUTDOWN_COMMANDS entry; None on success, else the last error."""
+        error = "no shutdown command configured"
+        for cmd in SHUTDOWN_COMMANDS:
             try:
-                subprocess.run(SHUTDOWN_COMMAND.split(), check=True, timeout=30)
-            except Exception as e:
-                logger.error(f"Shutdown command failed: {e}")
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                error = str(e)
+                continue
+            if r.returncode == 0:
+                return None
+            error = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()[-1][:80]
+            logger.warning(f"{' '.join(cmd)} failed: {error}")
+        return error
 
     # --- rendering -------------------------------------------------------
 

@@ -52,6 +52,7 @@ class ButtonHandler:
         self._stop_event = threading.Event()
         self._threads = []
         self._lock = threading.Lock()
+        self._taps_pending = threading.Event()
         self._socket = None
         self._buffer = ""
         self._taps = 0
@@ -81,6 +82,7 @@ class ButtonHandler:
             elif event in TAP_VALUES:
                 self._taps += TAP_VALUES[event]
                 self._last_tap = now
+                self._taps_pending.set()
                 self._window = window or self.gesture_window
         if fire_now:
             self._fire(fire_now)
@@ -120,7 +122,9 @@ class ButtonHandler:
             self._socket = socket.create_connection(
                 (PISUGAR_HOST, PISUGAR_PORT), timeout=2.0
             )
-            self._socket.settimeout(0.1)
+            # Long timeout: events wake us immediately; the timeout only bounds
+            # how long stop() waits. (0.1 s woke the Zero's CPU 10x a second.)
+            self._socket.settimeout(1.0)
             self._buffer = ""
             logger.info(f"Connected to pisugar-server at {PISUGAR_HOST}:{PISUGAR_PORT}")
             return True
@@ -216,8 +220,14 @@ class ButtonHandler:
     # --- gesture timer + lifecycle ------------------------------------------
 
     def _run_timer(self):
+        # Sleeps until a GPIO tap starts a gesture, then polls briefly to fire it.
         while not self._stop_event.is_set():
+            if not self._taps_pending.wait(timeout=1.0):
+                continue
             self.poll()
+            with self._lock:
+                if not self._taps:
+                    self._taps_pending.clear()
             time.sleep(0.05)
 
     def start(self):
