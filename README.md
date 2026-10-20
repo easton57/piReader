@@ -180,7 +180,6 @@ arm_freq=700                      # optional: lower max clock (default 1000)
 
   and turn HDMI off at boot (saves ~20–25 mA): add `/usr/bin/tvservice -o` to
   `/etc/rc.local` (legacy firmware) or append `video=HDMI-A-1:d` to `/boot/firmware/cmdline.txt` (KMS).
-- The reader itself avoids waking the CPU when idle (no fast polling loops).
 
 ---
 
