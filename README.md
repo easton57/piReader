@@ -1,227 +1,180 @@
-# 🖥️ piReader
+# piReader
 
-A tiny e-ink reader powered by a Raspberry Pi! 📚⚡
+A small e-ink ebook reader built from a Raspberry Pi Zero W, a PiSugar 2 battery and a Waveshare
+2.13" e-paper display. One button, a 250×122 screen, and enough features to actually read on it:
+EPUB/PDF/text, a WebDAV library, reading progress synced with Koodo Reader, and a web UI for
+managing everything.
 
----
+## Hardware
 
-## 🎯 What's This Project?
+| Part | Notes |
+|------|-------|
+| Raspberry Pi Zero W | Wi-Fi is used for the web UI, cloud library and sync |
+| PiSugar 2 | Battery, and its button is the main input |
+| Waveshare 2.13" e-Paper V4 | 250×122 black/white. The red/black/white (B) V4 also works, but only does slow full refreshes (~15 s) |
+| Push button (optional) | Between a GPIO pin and GND, e.g. BCM20 (pin 38) and GND (pin 39) |
 
-**piReader** is a DIY e-ink ebook reader built with a Raspberry Pi Zero W and a cute little Waveshare e-paper display. It's like having a Kindle, but smaller, cheaper, and way more fun to build yourself! 🤔
-
-Think of it as a tiny, dedicated reading machine that:
-- 📖 Reads your personal ebook library
-- 🔋 Runs on batteries for weeks
-- 🌐 Has a built-in web UI for uploading books
-- ⭐ Remembers where you left off
-
-Perfect for bookworms who love tinkering with hardware! 🐛
-
----
-
-## 🛠️ The Hardware
-
-Here's what makes this little guy tick:
-
-| Component | What It Does |
-|----------|-------------|
-| **Raspberry Pi Zero W** | The brain! Handles all the computing, runs at 1GHz with built-in WiFi |
-| **PiSugar 2** | Battery board that keeps it running for ~2 weeks on a charge 🔋 |
-| **Waveshare 2.7" e-Paper** | The display! Low power, high contrast, looks like real paper 📄 |
-
-> 💡 **Pro tip:** The e-paper display only uses power when refreshing, so the battery lasts forever!
-
-### Pin Connections
+Display wiring:
 
 ```
-Display → Pi Zero W
-----------------
-VCC     → Pin 1 (3.3V)
-GND     → Pin 6 (GND)
-DIN     → Pin 19 (MOSI)
-CLK     → Pin 23 (SCLK)
-CS      → Pin 24 (CE0)
-DC      → Pin 22 (GPIO25)
-RST     → Pin 11 (GPIO17)
-BUSY    → Pin 18 (GPIO24)
+Display  Pi Zero W
+VCC      pin 1  (3.3V)
+GND      pin 6  (GND)
+DIN      pin 19 (MOSI)
+CLK      pin 23 (SCLK)
+CS       pin 24 (CE0)
+DC       pin 22 (GPIO25)
+RST      pin 11 (GPIO17)
+BUSY     pin 18 (GPIO24)
 ```
 
----
+Pick the panel with `DISPLAY_DRIVER` in `config.py` (`epd2in13_V4` for black/white, the default,
+or `epd2in13b_V4` for the red one). The drivers are Waveshare's, vendored in `waveshare/`. To use a
+GPIO button, set `BUTTON_GPIO` to its BCM number.
 
-## ✨ Features
+## What it does
 
-What can piReader actually do? Glad you asked! 🎉
+- Reads EPUB, PDF, TXT and Markdown. Text is reflowed and word-wrapped to the screen. PDFs are
+  reflowed too; scanned PDFs with no text fall back to page images (3 taps toggles between the two).
+- Saves your place in every book on each page turn and reopens the last book on boot.
+- Cloud folder: browse a WebDAV folder (e.g. Nextcloud) from the reader. Books download when you
+  open them, with a progress bar, and are available offline afterwards. If you point it at Koodo
+  Reader's WebDAV folder it shows real titles instead of Koodo's numbered filenames.
+- Syncs reading progress with Koodo Reader or KOReader through a KOReader sync server (EPUB only).
+- Settings on the device or in the web UI: font (Mono, Sans, Serif, or any .ttf/.otf you put in
+  `fonts/`), text size, how often pages and menus do a full refresh, and auto power off.
+- Web UI on port 5000 for uploading and deleting books, removing downloaded copies, setting the
+  screensaver, configuring cloud and sync, and shutting down.
+- Screensaver after 5 minutes idle, powers off after 15 (configurable, skipped while charging).
 
-### 📚 Reading Capabilities
-- **.txt files** - Plain text, the way reading was meant to be
-- **.epub files** - Reflowed text, adjustable font sizes
-- **.pdf files** - Page-by-page navigation (warning: some PDFs are tricky!)
+## Controls
 
-### 🖱️ Interface
-- **File browser** - Click to navigate folders, click to open files
-- **Battery indicator** - Always know how much charge is left 🔋
-- **Bookmarks** - Your last reading position is automatically saved!
-- **Last read position** - Pick up right where you left off
+| Gesture | File list | Reading |
+|---------|-----------|---------|
+| 1 tap | Down | Next page |
+| 2 taps | Up | Previous page |
+| Long press | Open (`..` goes up a folder) | Back to the home screen |
+| 3 taps* | Open | PDF: switch between text and page images |
+| Hold 3 s* | Shut down | Shut down |
 
-### 🔌 Power Controls
-- **5-click shutdown** - Click the button 5 times to safely power off
-- **Auto-save** - Saves your progress every page turn
+\* GPIO button only. pisugar-server only reports single, double and long presses, so the PiSugar
+button does the first three rows. Without a GPIO button you can shut down from Settings or the
+web UI.
 
-### 🌐 Web UI
-- **Browser-based file upload** - Drag and drop books from your computer!
-- **Access from any device** - Open `piReader.local` in your browser
+The file list uses partial refresh, so moving around is quick. Book pages get a full refresh on
+every turn by default; you can trade some ghosting for speed in Settings. When the screensaver is
+showing, the first press just wakes it.
 
----
+## Setup
 
-## 🎮 Controls
+1. Flash Raspberry Pi OS Lite and enable SPI and I2C (`sudo raspi-config`, Interface Options).
+2. Install pisugar-server and pick the right model when it asks:
+   ```bash
+   curl http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash
+   ```
+   Don't bind scripts to the button in its web UI; the reader handles the button itself.
+3. Install the reader:
+   ```bash
+   sudo apt install -y git python3-venv poppler-utils fonts-dejavu-core
+   git clone https://github.com/easton57/piReader.git ~/piReader
+   cd ~/piReader
+   python3 -m venv venv
+   venv/bin/pip install -r requirements.txt
+   venv/bin/python test/hardware_display_check.py   # should show "Display OK"
+   ```
+4. Start it on boot. `ereader.service` assumes the user `pi` and `/home/pi/piReader`, so edit
+   `User=` and the paths if yours differ.
+   ```bash
+   sudo cp ereader.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now ereader
+   ```
+5. Let the service user power the Pi off. Without this, Shut down and auto power off only show
+   "Couldn't power off".
+   ```bash
+   echo "pi ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff" | sudo tee /etc/sudoers.d/pireader
+   sudo chmod 440 /etc/sudoers.d/pireader
+   ```
 
-Here's your button map! Know your controls, read like a pro:
+Put books in `library/`, or upload them at `http://<pi-ip>:5000`. Progress and caches are kept in
+`cache/`.
 
-| Action | Button Press |
-|--------|-------------|
-| **Next page** | Single click |
-| **Previous page** | Double click |
-| **Menu/File browser** | Triple click |
-| **Shutdown** | Click 5 times |
+## Cloud library
 
-> 💡 *Tip: The button is connected to GPIO 21 by default. Give it a firm press!*
+In the web UI, enter a WebDAV folder URL and login. For Nextcloud that's
+`https://<host>/remote.php/dav/files/<user>/<folder>` with an app password. The login is saved in
+`webdav.json` (readable only by you, not committed). Downloads go to `library/.cloud/` and also
+show up on the home screen.
 
----
+Koodo Reader stores its books as `KoodoReader/book/<number>.epub`. Pointing the reader at
+`.../KoodoReader` or `.../KoodoReader/book` works; it reads Koodo's `config/books.db` (without
+modifying it) to show "Title - Author".
 
-## 🚀 Quick Start
+## Progress sync
 
-Ready to build your own piReader? Let's go!
+Set a KOReader sync server in the web UI: the public `https://sync.koreader.rocks`, or your own
+(kosync and korrosync both run fine in Docker). Tick "Create this account" the first time. Use the
+same server and login in Koodo (Settings, "Auto sync reading progress with KOReader") or KOReader.
 
-### 1. Gather Your Stuff
+Things to know:
 
-```
-- Raspberry Pi Zero W
-- PiSugar 2 battery board
-- Waveshare 2.7" e-Paper HAT
-- A microSD card (8GB+)
-- A little case (optional but nice)
-```
+- Books are matched by a hash of the file, so every device needs the same EPUB file. Downloading
+  from the same Nextcloud folder takes care of that.
+- When you open a book, the reader checks the server and jumps ahead if another device read
+  further more recently. Page turns are sent in the background. Opening a book never sends
+  anything, so opening it offline can't overwrite newer progress from your phone.
+- Offline reading works normally. Progress is queued on disk and sent once the server is
+  reachable, unless another device has synced newer progress for that book in the meantime.
+- Positions are exchanged as XPath pointers plus a percentage. You land on the page containing
+  that spot, but the top of the page won't line up exactly with the other app.
+- Koodo only syncs when you press its sync button.
+- "Newer" is decided by the clock, so the Pi needs the right time (NTP over Wi-Fi, or the PiSugar
+  RTC).
 
-### 2. Set Up the Pi
+## Battery and power
+
+The Pi Zero can't suspend; Linux has no sleep mode for its chip, so idle still draws roughly
+0.4-0.6 W. That's about 7-9 hours on a 1200 mAh PiSugar 2. Auto power off is what makes a charge
+last: the e-ink keeps showing the screensaver with no power, and the PiSugar button boots it back
+into the book you were reading.
+
+Boot time depends mostly on what else the OS starts. A stock Raspberry Pi OS image runs a lot
+that a reader doesn't need. Things worth turning off:
 
 ```bash
-# Flash Raspberry Pi OS Lite to your SD card
-# (using Raspberry Pi Imager is the easy way)
-
-# Enable SPI and I2C:
-sudo raspi-config
-# → Interface Options → SPI Enable → Yes
-# → Interface Options → I2C Enable → Yes
+sudo touch /etc/cloud/cloud-init.disabled
+sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
+sudo systemctl mask udisks2.service accounts-daemon.service rpi-resize-swap-file.service
 ```
 
-### 3. Install the Software
+Use `systemd-analyze blame` and `systemd-analyze critical-chain ereader.service` to see what's
+still slow.
+
+Optional power savings in `/boot/firmware/config.txt`:
+
+```
+dtparam=act_led_trigger=none
+dtparam=act_led_activelow=on
+dtoverlay=disable-bt
+arm_freq=700
+```
+
+HDMI can be turned off by appending `video=HDMI-A-1:d` to `/boot/firmware/cmdline.txt`.
+
+After shutdown the PiSugar should cut power on its own. If its LEDs are still on a minute later,
+the halted Pi is still drawing 20-30 mA.
+
+## Development
 
 ```bash
-# Clone and install!
-git clone https://github.com/yourusername/piReader.git
-cd piReader
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Run it!
-python3 main.py
+python3 main.py --mock     # no hardware: frames go to debug_output.png, type 1/2/3/l/h + Enter
+python3 -m pytest test     # needs pytest and reportlab; wsgidav + cheroot for the cloud tests
 ```
 
-### 4. Add Some Books
+Dependencies are in `requirements.txt`: Pillow, ebooklib and beautifulsoup4 for EPUB, pdf2image
+and poppler for PDF (pdfminer.six as a fallback), Flask for the web UI, RPi.GPIO and spidev for
+the display.
 
-```bash
-# Put your books in the library folder:
-cp your-book.epub library/
+## License
 
-# Or use the web UI:
-# Open http://piReader.local in your browser
-```
-
-### 5. Start Reading! 📖
-
-```bash
-# The main loop handles everything
-python3 main.py
-
-# Want it to run on boot?
-sudo cp ereader.service /etc/systemd/system/
-sudo systemctl enable ereader
-sudo systemctl start ereader
-```
-
----
-
-## 🧪 Testing on Desktop
-
-Don't have the hardware yet? No problem! You can test everything on your development machine:
-
-```bash
-# Activate your virtual environment
-source venv/bin/activate
-
-# Run with the simulator (opens a window instead of real hardware)
-python3 main.py --simulator
-
-# Or with a mock display (for headless testing)
-python3 main.py --mock
-```
-
-The simulator shows you exactly what would appear on the e-paper display, so you can design and debug without needing the hardware! 🎮
-
----
-
-## 🎉 The Fun Stuff
-
-Why build a piReader instead of just buying a Kindle? Here's what makes it cool:
-
-🌱 **It grows with you** - Add new features, modify the code, make it yours!
-
-💻 **Learn by doing** - You'll learn about:
-- GPIO pins and hardware interaction
-- E-paper display drivers
-- Building a web server in Python
-- Embedded Linux on the Pi
-
-🔧 **Totally hackable** - Want to add a temperature sensor? A clock? Different file formats? Go for it!
-
-🎁 **It's yours** - You built it yourself. That's pretty cool.
-
-🤓 **It's a conversation starter** - "Sorry, I can't talk right now, I'm reading on my homemade e-reader."
-
----
-
-## 📋 Requirements
-
-- epd2in7 - Waveshare e-paper library
-- Pillow - Image processing
-- lxml - EPUB parsing
-- pypdf2 - PDF handling
-- flask - Web UI
-- gpiozero - Button handling
-
-See `requirements.txt` for the full list!
-
----
-
-## 🙏 Thanks
-
-Big thanks to:
-- [Waveshare](https://www.waveshare.com/) for the awesome e-paper displays
-- The Raspberry Pi Foundation for making single-board computers accessible
-- The Python community for all the great libraries
-
----
-
-## 📜 License
-
-MIT License - do whatever you want with this! Just don't blame me if your piReader judges your book choices. 📚
-
----
-
-## 🐛 Problems? Ideas?
-
-Found a bug? Have an idea? Open an issue!
-
----
-
-*Made with 💻 and 📚 by someone who really likes books*
+MIT

@@ -1,24 +1,19 @@
-# E-Reader Dependencies
-# Install on Raspberry Pi with: pip3 install -r requirements.txt
+# Install inside a venv on the Pi:  pip install -r requirements.txt
+# System packages needed first:     sudo apt install poppler-utils fonts-dejavu-core
+# The Waveshare display driver is vendored in epd2in13b_v4/ (no pip package).
 
-# Display driver comes from Waveshare
-epd-library
+Pillow>=10.1
+RPi.GPIO>=0.7.1; platform_machine == "armv6l" or platform_machine == "armv7l" or platform_machine == "aarch64"
+spidev>=3.5; platform_machine == "armv6l" or platform_machine == "armv7l" or platform_machine == "aarch64"
 
-Pillow>=9.0.0
-RPi.GPIO>=0.7.1
-spidev>=3.5
-
-# EPUB support
-ebooklib>=0.5
+# EPUB
+ebooklib>=0.18
 beautifulsoup4>=4.11
 
-# PDF support
+# PDF (pdf2image needs poppler-utils)
 pdf2image>=1.16
 pdfminer.six>=20221105
 
-# PiSugar WebSocket support
-websockets>=10.0
-
-# Web UI for upload/settings
+# Web UI
 flask>=2.0
 werkzeug>=2.0

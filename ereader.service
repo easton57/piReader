@@ -1,11 +1,14 @@
 [Unit]
-Description=E-Reader Application
+Description=piReader
 After=network.target pisugar-server.service
+Wants=pisugar-server.service
 
 [Service]
-ExecStart=/usr/bin/python3 /home/pi/ereader/main.py
-WorkingDirectory=/home/pi/ereader
+# Adjust paths if you cloned somewhere else.
+ExecStart=/home/pi/piReader/venv/bin/python /home/pi/piReader/main.py
+WorkingDirectory=/home/pi/piReader
 Restart=on-failure
+RestartSec=5
 User=pi
 Environment=PYTHONUNBUFFERED=1
 

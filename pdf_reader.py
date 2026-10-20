@@ -1,180 +1,107 @@
-import os
-import hashlib
+"""PDF page-image mode: rasterize one page at a time and fit it to the panel.
+
+Used for scanned PDFs (no extractable text) or when toggled with 3 taps.
+Text-based PDFs are read reflowed through TextReader instead, since a full
+page shrunk to 250x122 is unreadable.
+"""
+
 import logging
-from typing import List
-from PIL import Image, ImageDraw, ImageFont
+import os
+
+from PIL import Image
+
+from config import DISPLAY_HEIGHT, DISPLAY_WIDTH, PDF_DPI
+from documents import file_key
+from display import load_font, new_draw
+from reader import draw_footer
 
 logger = logging.getLogger(__name__)
 
-PDF2IMAGE_SUPPORTED = False
-try:
-    from pdf2image import convert_from_path
-    PDF2IMAGE_SUPPORTED = True
-except ImportError:
-    logger.warning("pdf2image not installed")
-
-PDFMINER_SUPPORTED = False
-try:
-    from pdfminer.high_level import extract_text
-    PDFMINER_SUPPORTED = True
-except ImportError:
-    logger.warning("pdfminer not installed")
-
 
 class PDFReader:
-    WIDTH = 250
-    HEIGHT = 122
-    MARGIN_TOP = 4
-    MARGIN_BOTTOM = 4
-    MARGIN_LEFT = 6
-    MARGIN_RIGHT = 6
+    WIDTH = DISPLAY_WIDTH
+    HEIGHT = DISPLAY_HEIGHT
 
-    def __init__(self, cache_dir: str, dpi: int = 150):
+    def __init__(self, cache_dir, dpi=PDF_DPI):
         self.cache_dir = cache_dir
         self.dpi = dpi
         self.file_path = None
-        self.mode = None
-        self.image_paths = []
-        self.text_pages = []
+        self.page_count = 0
         self.current_page = 0
-        self.full_refresh_counter = 0
+        self.font = load_font(10)
 
-    def open(self, path: str, mode: str = "image") -> bool:
+    def open(self, path):
+        try:
+            from pdf2image import pdfinfo_from_path
+
+            info = pdfinfo_from_path(path)
+            self.page_count = int(info.get("Pages", 0))
+        except Exception as e:
+            logger.error(f"Can't read PDF {path}: {e}")
+            return False
+        if self.page_count < 1:
+            return False
         self.file_path = path
-        self.mode = mode
         self.current_page = 0
-        self.full_refresh_counter = 0
-        if mode == "image":
-            return self._load_image_mode()
-        else:
-            return self._load_text_mode()
+        self._cache_path = os.path.join(self.cache_dir, file_key(path))
+        os.makedirs(self._cache_path, exist_ok=True)
+        return True
 
-    def _get_cache_path(self) -> str:
-        if not self.file_path:
-            return None
-        book_hash = hashlib.md5(self.file_path.encode()).hexdigest()[:8]
-        cache_path = os.path.join(self.cache_dir, book_hash)
-        os.makedirs(cache_path, exist_ok=True)
-        return cache_path
+    def _page_image(self, index):
+        out = os.path.join(self._cache_path, f"page_{index:04d}.png")
+        if os.path.exists(out):
+            return Image.open(out)
+        from pdf2image import convert_from_path
 
-    def _load_image_mode(self) -> bool:
-        if not PDF2IMAGE_SUPPORTED:
-            logger.error("pdf2image not available")
-            return False
-        cache_path = self._get_cache_path()
-        if not cache_path:
-            return False
-        existing = sorted([f for f in os.listdir(cache_path) if f.endswith(".png")])
-        if existing:
-            self.image_paths = [os.path.join(cache_path, f) for f in existing]
-            logger.info("Loaded " + str(len(self.image_paths)) + " cached pages")
-            return True
-        logger.info("Rendering PDF: " + self.file_path)
-        try:
-            pages = convert_from_path(self.file_path, dpi=self.dpi)
-            self.image_paths = []
-            for i, page in enumerate(pages):
-                logger.info("Rendering page " + str(i+1) + "/" + str(len(pages)))
-                img = self._prepare_page(page)
-                out_path = os.path.join(cache_path, "page_" + format(i, "04d") + ".png")
-                img.save(out_path)
-                self.image_paths.append(out_path)
-            logger.info("Rendered " + str(len(self.image_paths)) + " pages")
-            return True
-        except Exception as e:
-            logger.error("Could not render PDF: " + str(e))
-            return False
+        # One page at a time: rendering a whole PDF at once OOMs a Pi Zero.
+        pages = convert_from_path(
+            self.file_path, dpi=self.dpi, first_page=index + 1, last_page=index + 1,
+            grayscale=True,
+        )
+        img = self._fit(pages[0])
+        img.save(out)
+        return img
 
-    def _prepare_page(self, page: Image.Image) -> Image.Image:
-        if page.height > page.width:
-            page = page.rotate(90, expand=True)
-        page.thumbnail((self.WIDTH, self.HEIGHT), Image.LANCZOS)
+    def _fit(self, page):
+        # Crop away white margins so the actual content gets the pixels.
+        gray = page.convert("L")
+        bbox = Image.eval(gray, lambda p: 255 - p).point(lambda p: 255 if p > 24 else 0).getbbox()
+        if bbox:
+            gray = gray.crop(bbox)
+        area_h = self.HEIGHT - 11
+        gray.thumbnail((self.WIDTH, area_h), Image.LANCZOS)
         canvas = Image.new("L", (self.WIDTH, self.HEIGHT), 255)
-        x = (self.WIDTH - page.width) // 2
-        y = (self.HEIGHT - page.height) // 2
-        canvas.paste(page.convert("L"), (x, y))
-        # Convert to RGB directly for display compatibility
-        return canvas.convert("RGB")
+        canvas.paste(gray, ((self.WIDTH - gray.width) // 2, (area_h - gray.height) // 2))
+        return canvas
 
-    def _load_text_mode(self) -> bool:
-        if not PDFMINER_SUPPORTED:
-            logger.error("pdfminer not available")
-            return False
-        try:
-            text = extract_text(self.file_path)
-            self._paginate_text(text)
-            logger.info("Extracted text: " + str(len(self.text_pages)) + " pages")
-            return True
-        except Exception as e:
-            logger.error("Could not extract text: " + str(e))
-            return False
-
-    def _paginate_text(self, text: str):
-        self.text_pages = []
-        if not text:
-            self.text_pages = [""]
-            return
-        lines = text.split("\n")
-        current_page = []
-        current_height = 0
-        line_height = 12
-        available_height = self.HEIGHT - self.MARGIN_TOP - self.MARGIN_BOTTOM
-        for line in lines:
-            if current_height + line_height > available_height:
-                self.text_pages.append("\n".join(current_page))
-                current_page = []
-                current_height = 0
-            if line.strip():
-                current_page.append(line)
-                current_height += line_height
-        if current_page:
-            self.text_pages.append("\n".join(current_page))
-        if not self.text_pages:
-            self.text_pages = [""]
-
-    def next_page(self) -> bool:
-        max_page = len(self.image_paths) if self.mode == "image" else len(self.text_pages)
-        if self.current_page < max_page - 1:
+    def next_page(self):
+        if self.current_page < self.page_count - 1:
             self.current_page += 1
             return True
         return False
 
-    def prev_page(self) -> bool:
+    def prev_page(self):
         if self.current_page > 0:
             self.current_page -= 1
             return True
         return False
 
-    def render(self) -> Image.Image:
-        if self.mode == "image":
-            return self._render_image()
-        else:
-            return self._render_text()
+    def set_page(self, n):
+        self.current_page = max(0, min(int(n), self.page_count - 1))
 
-    def _render_image(self) -> Image.Image:
-        if not self.image_paths:
-            return Image.new("L", (self.WIDTH, self.HEIGHT), 255)
-        try:
-            img = Image.open(self.image_paths[self.current_page])
-            return img
-        except:
-            return Image.new("L", (self.WIDTH, self.HEIGHT), 255)
-
-    def _render_text(self) -> Image.Image:
-        image = Image.new("L", (self.WIDTH, self.HEIGHT), 255)
-        draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default()
-        if self.text_pages and self.current_page < len(self.text_pages):
-            text = self.text_pages[self.current_page]
-            draw.text((self.MARGIN_LEFT, self.MARGIN_TOP), text, font=font, fill=0)
-        page_text = str(self.current_page + 1) + "/" + str(len(self.text_pages))
-        draw.text((self.WIDTH - 30, self.HEIGHT - 10), page_text, font=font, fill=128)
-        return image
-
-    def get_current_page(self) -> int:
+    def get_current_page(self):
         return self.current_page
 
-    def get_total_pages(self) -> int:
-        if self.mode == "image":
-            return len(self.image_paths)
-        return len(self.text_pages)
+    def get_total_pages(self):
+        return self.page_count
+
+    def render(self):
+        try:
+            img = self._page_image(self.current_page).copy()
+        except Exception as e:
+            logger.error(f"Failed to render page {self.current_page + 1}: {e}")
+            img = Image.new("L", (self.WIDTH, self.HEIGHT), 255)
+            new_draw(img).text((6, 40), "Couldn't render page", fill=0, font=self.font)
+        draw = new_draw(img)
+        draw_footer(draw, self.font, "PDF", f"{self.current_page + 1}/{self.page_count}")
+        return img

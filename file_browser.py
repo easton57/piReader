@@ -3,194 +3,250 @@ import logging
 import os
 from typing import List, Optional, Tuple
 
+from cloud import KOODO_FILE
+from config import CLOUD_LABEL, SETTINGS_LABEL, SHOW_CLOUD_ON_HOME, SUPPORTED_EXTENSIONS
+
 logger = logging.getLogger(__name__)
+
+PARENT = ".."  # pseudo-entry at the top of every subfolder
 
 
 class FileBrowser:
-    """File browser for navigating and selecting files on an e-reader device."""
+    """Directory navigation plus per-book reading progress."""
 
-    LOCATION_FILE = ".ereader_location"
-    SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf"}
-
-    def __init__(self, root_path: str):
-        """Initialize the file browser with a root directory path."""
+    def __init__(self, root_path: str, state_file: str, cloud=None, show_settings=False):
         self.root_path = os.path.abspath(root_path)
+        self.state_file = state_file
+        self.cloud = cloud  # optional CloudSource
         self.current_path = self.root_path
-        self.items: List[Tuple[str, bool]] = []  # List of (name, is_dir) tuples
+        self.items: List[Tuple[str, bool]] = []
+        self.remote_only = set()  # names in the current cloud folder not downloaded yet
+        self.cloud_offline = False
+        self.show_settings = show_settings
         self.cursor_position = 0
-        self.selected_index: Optional[int] = None
-        self.saved_location: Optional[dict] = None
-
-        # Ensure root directory exists
-        if not os.path.exists(self.root_path):
-            os.makedirs(self.root_path)
-
-        # Load saved location
-        self._load_location()
-
-        # Initial refresh
+        self._listing_signature = None
+        os.makedirs(self.root_path, exist_ok=True)
+        self.state = self._load_state()
         self._refresh()
 
-    def _load_location(self) -> None:
-        """Load saved location from JSON file."""
-        self.saved_location = None
-        location_file_path = os.path.join(self.root_path, self.LOCATION_FILE)
-        logger.debug(f"Looking for saved location at: {location_file_path}")
+    # --- persisted state ----------------------------------------------------
+    # {"last_open": path | null, "progress": {path: {"page": n, "mode": m}}}
 
-        if os.path.exists(location_file_path):
-            logger.info("Saved location file exists")
-            try:
-                with open(location_file_path, "r", encoding="utf-8") as f:
-                    self.saved_location = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                self.saved_location = None
-
-    def save_location(self, file_path: str, page: int) -> None:
-        """Save the current location to a JSON file.
-
-        Args:
-            file_path: The selected file path
-            page: The page number when reading
-        """
-        location_file_path = os.path.join(self.root_path, self.LOCATION_FILE)
-
-        # Extract selected_id (the file/folder name) from path
-        selected_id = os.path.basename(file_path) if file_path else None
-
-        location_data = {"path": file_path, "page": page, "selected_id": selected_id}
-
+    def _load_state(self) -> dict:
         try:
-            with open(location_file_path, "w", encoding="utf-8") as f:
-                json.dump(location_data, f, indent=2)
-        except IOError:
-            pass  # Silently fail if we can't write
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            if isinstance(state, dict):
+                state.setdefault("progress", {})
+                state.setdefault("last_open", None)
+                return state
+        except FileNotFoundError:
+            pass
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Ignoring unreadable state file: {e}")
+        return {"last_open": None, "progress": {}}
 
-    def get_saved_location(self) -> Optional[dict]:
-        """Return the saved location."""
-        return self.saved_location
+    def _save_state(self) -> None:
+        os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+        tmp = self.state_file + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.state, f, indent=2)
+            os.replace(tmp, self.state_file)  # atomic: power loss can't corrupt it
+        except OSError as e:
+            logger.error(f"Couldn't save state: {e}")
 
-    def go_to_saved_location(self) -> bool:
-        """Restore position - if a file was selected when app closed, select it again.
+    def save_progress(self, path: str, page, mode: Optional[str] = None) -> None:
+        """page may be a full progress dict ({"page", "mode", "pos", ...})."""
+        entry = dict(page) if isinstance(page, dict) else {"page": page, "mode": mode}
+        self.state["progress"][path] = entry
+        self.state["last_open"] = path
+        self._save_state()
 
-        Returns:
-            True if successfully restored to saved location, False otherwise
-        """
-        if not self.saved_location:
-            return False
+    def get_progress(self, path: str) -> dict:
+        return self.state["progress"].get(path, {})
 
-        saved_path = self.saved_location.get("path")
-        selected_id = self.saved_location.get("selected_id")
+    def set_last_open(self, path: Optional[str]) -> None:
+        self.state["last_open"] = path
+        self._save_state()
 
-        if not saved_path or not selected_id:
-            return False
+    def get_last_open(self) -> Optional[str]:
+        path = self.state.get("last_open")
+        return path if path and os.path.isfile(path) else None
 
-        # Navigate to the directory containing the saved file
-        saved_dir = os.path.dirname(saved_path)
-        saved_filename = os.path.basename(saved_path)
+    def reveal(self, path: str) -> None:
+        """Navigate to the folder containing path and put the cursor on it."""
+        folder = os.path.dirname(os.path.abspath(path))
+        if not folder.startswith(self.root_path) or not os.path.isdir(folder):
+            return
+        self.current_path = folder
+        self._refresh(keep=os.path.basename(path))
 
-        # If saved path is the current directory, refresh and find item
-        if saved_dir == self.current_path:
-            self._refresh()
-            # Find and select the item
-            for i, (name, is_dir) in enumerate(self.items):
-                if name == selected_id:
-                    self.cursor_position = i
-                    self.selected_index = i
-                    return True
-        elif os.path.exists(saved_dir):
-            # Navigate to the saved directory
-            self.current_path = saved_dir
-            self._refresh()
-            # Find and select the item
-            for i, (name, is_dir) in enumerate(self.items):
-                if name == selected_id:
-                    self.cursor_position = i
-                    self.selected_index = i
-                    return True
+    # --- listing ------------------------------------------------------------
 
-        return False
+    def in_cloud(self) -> bool:
+        return self.cloud is not None and self.cloud.contains(self.current_path)
 
-    def _refresh(self) -> None:
-        """Refresh the current directory contents."""
-        logger.info(f"Refreshing file browser for path: {self.current_path}")
-        self.items = []
-        self.cursor_position = 0
-        self.selected_index = None
-
+    def _scan(self, force_remote: bool = False) -> List[Tuple[str, bool]]:
         try:
             entries = os.listdir(self.current_path)
-            logger.info(f"Found {len(entries)} entries in directory")
         except OSError as e:
-            logger.error(f"Error listing directory: {e}")
+            logger.error(f"Error listing {self.current_path}: {e}")
             entries = []
-
-        for entry in sorted(entries):
-            # Skip hidden files
+        dirs, files = [], []
+        for entry in entries:
             if entry.startswith("."):
                 continue
+            full = os.path.join(self.current_path, entry)
+            if os.path.isdir(full):
+                dirs.append((entry, True))
+            elif os.path.splitext(entry)[1].lower() in SUPPORTED_EXTENSIONS:
+                files.append((entry, False))
+        remote_only = set()
+        if self.in_cloud():
+            remote = self.cloud.remote_entries(self.current_path, force=force_remote)
+            self.cloud_offline = remote is None
+            local = {name for name, _ in dirs + files}
+            for name, is_dir in remote or []:
+                if name not in local:
+                    (dirs if is_dir else files).append((name, is_dir))
+                    if not is_dir:
+                        remote_only.add(name)
+        self.remote_only = remote_only
 
-            full_path = os.path.join(self.current_path, entry)
-            is_dir = os.path.isdir(full_path)
+        if self.is_root() and self.cloud is not None and SHOW_CLOUD_ON_HOME:
+            files.extend((name, False) for name in self.cloud.downloaded_books(self.root_path))
 
-            if is_dir or self._is_supported_file(entry):
-                logger.debug(f"Adding entry: {entry} (is_dir={is_dir})")
-                self.items.append((entry, is_dir))
-        logger.info(f"Total items after refresh: {len(self.items)}")
-        logger.info(f"Updated items list with {len(self.items)} entries")
+        key = lambda item: self.label(item[0]).lower()
+        top = []
+        if self.current_path != self.root_path:
+            top.append((PARENT, True))
+        elif self.cloud is not None and self.cloud.enabled():
+            top.append((CLOUD_LABEL, True))
+        bottom = [(SETTINGS_LABEL, False)] if self.is_root() and self.show_settings else []
+        return top + sorted(dirs, key=key) + sorted(files, key=key) + bottom
 
-    def _is_supported_file(self, filename: str) -> bool:
-        """Check if a file is a supported document type."""
-        _, ext = os.path.splitext(filename.lower())
-        return ext in self.SUPPORTED_EXTENSIONS
+    def _refresh(self, keep: Optional[str] = None, force_remote: bool = False) -> None:
+        self.items = self._scan(force_remote)
+        self._listing_signature = tuple(self.items)
+        self.cursor_position = 0
+        if keep:
+            for i, (name, _) in enumerate(self.items):
+                if name == keep:
+                    self.cursor_position = i
+                    break
+
+    def refresh_if_changed(self) -> None:
+        """Pick up files added/removed (e.g. via the web UI) without losing the cursor."""
+        if tuple(self._scan()) != self._listing_signature:
+            current = self.items[self.cursor_position][0] if self.items else None
+            self._refresh(keep=current)
+
+    def refresh(self) -> None:
+        self._refresh()
+
+    # --- navigation ---------------------------------------------------------
 
     def move_up(self) -> None:
-        """Move the cursor up."""
         if self.items:
             self.cursor_position = (self.cursor_position - 1) % len(self.items)
 
     def move_down(self) -> None:
-        """Move the cursor down."""
         if self.items:
             self.cursor_position = (self.cursor_position + 1) % len(self.items)
 
-    def get_selected(self) -> Optional[str]:
-        """Get the currently selected item name."""
-        if self.selected_index is not None and self.selected_index < len(self.items):
-            return self.items[self.selected_index][0]
-        return None
-
     def get_selected_path(self) -> Optional[str]:
-        """Get the full path of the currently selected item."""
-        selected = self.get_selected()
-        if selected:
-            return os.path.join(self.current_path, selected)
-        return None
+        if not self.items:
+            return None
+        name = self.items[self.cursor_position][0]
+        if name == CLOUD_LABEL and self.current_path == self.root_path and self.cloud:
+            return self.cloud.mirror_root
+        return os.path.join(self.current_path, name)
 
-    def select(self) -> None:
-        """Select the item at the current cursor position."""
-        if self.items:
-            self.selected_index = self.cursor_position
+    def label(self, name: str) -> str:
+        """Display name: Koodo's book title for its numbered files, else the filename."""
+        if self.cloud is not None:
+            full = os.path.join(self.current_path, name)
+            if self.cloud.contains(full) and full != self.cloud.mirror_root:
+                title = self.cloud.title_for(os.path.dirname(full), os.path.basename(full))
+                if title:
+                    return title
+                if os.sep in name:  # downloaded cloud book listed on the home page
+                    return os.path.basename(name)
+        return name
 
-    def go_up(self) -> None:
-        """Navigate to the parent directory."""
-        if self.current_path != self.root_path:
-            parent = os.path.dirname(self.current_path)
-            if os.path.exists(parent):
-                self.current_path = parent
-                self._refresh()
+    def go_home(self, select: Optional[str] = None) -> None:
+        """Back to the library root, with the cursor on `select` if it's listed there."""
+        self.current_path = self.root_path
+        self._refresh()
+        if select:
+            self.select_path(select)
+
+    def select_path(self, path: str) -> bool:
+        """Put the cursor on path if it's listed in the current folder."""
+        for i, (name, _) in enumerate(self.items):
+            if os.path.join(self.current_path, name) == path:
+                self.cursor_position = i
+                return True
+        return False
+
+    def selected_name(self) -> Optional[str]:
+        return self.items[self.cursor_position][0] if self.items else None
+
+    def select_name(self, name: str) -> bool:
+        for i, (n, _) in enumerate(self.items):
+            if n == name:
+                self.cursor_position = i
+                return True
+        return False
+
+    def selected_is_dir(self) -> bool:
+        return bool(self.items) and self.items[self.cursor_position][1]
+
+    def selected_is_remote(self) -> bool:
+        """Selected item is a cloud file that hasn't been downloaded yet."""
+        return bool(self.items) and self.items[self.cursor_position][0] in self.remote_only
+
+    def selected_is_parent(self) -> bool:
+        return bool(self.items) and self.items[self.cursor_position][0] == PARENT
+
+    def enter(self, path: str) -> None:
+        if self.cloud is not None and self.cloud.contains(path):
+            os.makedirs(path, exist_ok=True)  # remote folder not mirrored yet
+            self.current_path = os.path.abspath(path)
+            self._refresh(force_remote=True)
+            if any(KOODO_FILE.match(name) for name, _ in self.items):
+                self.cloud.refresh_titles(self.current_path)
+                self._refresh()  # re-sort by the fresh titles (listing is cached)
+        elif os.path.isdir(path):
+            self.current_path = os.path.abspath(path)
+            self._refresh()
+
+    def go_up(self) -> bool:
+        if self.current_path == self.root_path:
+            return False
+        child = os.path.basename(self.current_path)
+        if self.cloud is not None and self.current_path == self.cloud.mirror_root:
+            child = CLOUD_LABEL
+        self.current_path = os.path.dirname(self.current_path)
+        self._refresh(keep=child)
+        return True
 
     def get_current_dir(self) -> str:
-        """Get the current directory path."""
         return self.current_path
 
+    def get_title(self) -> str:
+        if self.is_root():
+            return "Library"
+        if self.cloud is not None and self.current_path == self.cloud.mirror_root:
+            return "Cloud"
+        return os.path.basename(self.current_path)
+
+    def is_root(self) -> bool:
+        return self.current_path == self.root_path
+
     def get_items_for_display(self) -> List[Tuple[str, bool]]:
-        """Get the list of items for display."""
         return self.items
 
     def get_cursor_position(self) -> int:
-        """Get the current cursor position."""
         return self.cursor_position
-
-    def refresh(self) -> None:
-        """Public method to refresh the current directory contents."""
-        self._refresh()

@@ -1,2 +1,12 @@
 __pycache__/
-venv
+venv/
+.pytest_cache/
+cache/
+debug_output.png
+test/images/
+library/*
+!library/sample.txt
+webdav.json
+webdav.json.tmp
+kosync.json
+kosync.json.tmp

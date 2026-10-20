@@ -4,9 +4,6 @@ Flask web application for the e-reader.
 
 import logging
 import os
-import socket
-import time
-import urllib.request
 
 from flask import (
     Flask,
@@ -19,59 +16,33 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-try:
-    import RPi.GPIO as GPIO
+from config import CACHE_DIR, LIBRARY_PATH, MAX_UPLOAD_MB, SUPPORTED_EXTENSIONS
+from pisugar import get_battery_percentage as _battery
 
-    IS_PI = True
-except ImportError:
-    IS_PI = False
+IS_PI = os.path.exists("/proc/device-tree/model")
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-key")
-
-try:
-    from config import CACHE_DIR, LIBRARY_PATH
-except ImportError:
-    LIBRARY_PATH = "library"
-    CACHE_DIR = "cache"
+app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(16)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 UPLOAD_FOLDER = LIBRARY_PATH
 SCREENSAVER_FOLDER = CACHE_DIR
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["SCREENSAVER_FOLDER"] = SCREENSAVER_FOLDER
-
-SUPPORTED_EXTENSIONS = {".txt", ".epub", ".pdf"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp"}
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
+
+# Set by main.py so the web UI can ask the reader to do things (e.g. shut down
+# cleanly: save progress, push sync, show the screensaver, then power off).
+ACTION_QUEUE = None
 
 
 def get_battery_percentage():
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect(("127.0.0.1", 8423))
-            s.sendall(b"get battery")
-            bat = s.recv(1024).decode().strip()
-            bat = bat.split(":")[1]
-            return float(bat)
-    except Exception as e:
-        logger.error(f"Failed to get battery percentage: {e}")
-        return 0.0
-
-
-def get_page_count():
-    return 0
+    value = _battery()
+    return value if value is not None else 0
 
 
 def ensure_directory(path):
     os.makedirs(path, exist_ok=True)
-
-
-def is_running_on_pi():
-    return IS_PI
 
 
 def get_library_files():
@@ -79,22 +50,16 @@ def get_library_files():
     if os.path.exists(UPLOAD_FOLDER):
         for fn in os.listdir(UPLOAD_FOLDER):
             fp = os.path.join(UPLOAD_FOLDER, fn)
-            if os.path.isfile(fp):
-                _, ext = os.path.splitext(fn.lower())
-                if ext in SUPPORTED_EXTENSIONS:
-                    files.append(
-                        {
-                            "name": fn,
-                            "path": fp,
-                            "size": os.path.getsize(fp),
-                            "extension": ext,
-                        }
-                    )
+            _, ext = os.path.splitext(fn.lower())
+            if os.path.isfile(fp) and not fn.startswith(".") and ext in SUPPORTED_EXTENSIONS:
+                files.append(
+                    {"name": fn, "path": fp, "size": os.path.getsize(fp), "extension": ext}
+                )
     return sorted(files, key=lambda x: x["name"].lower())
 
 
 def get_current_screensaver():
-    for ext in IMAGE_EXTENSIONS:
+    for ext in sorted(IMAGE_EXTENSIONS):
         ip = os.path.join(SCREENSAVER_FOLDER, "screensaver" + ext)
         if os.path.exists(ip):
             return ip
@@ -102,7 +67,7 @@ def get_current_screensaver():
 
 
 def format_file_size(sb):
-    for u in ["B", "KB", "MB", "GB"]:
+    for u in ["B", "KB", "MB"]:
         if sb < 1024.0:
             return f"{sb:.0f} {u}"
         sb /= 1024.0
@@ -155,6 +120,11 @@ h1{font-size:1.5rem;color:#222}
 .status-item{display:flex;flex-direction:column}
 .status-label{font-size:0.75rem;color:#666;text-transform:uppercase;letter-spacing:0.5px}
 .status-value{font-size:1.25rem;font-weight:600}
+.cloud-form{display:flex;flex-direction:column;gap:10px}
+.cloud-form label{display:flex;flex-direction:column;font-size:0.85rem;color:#555;gap:4px}
+.cloud-form select{padding:8px;border:1px solid #ddd;border-radius:4px;font-size:0.95rem;background:#fff}
+.cloud-form input{padding:8px;border:1px solid #ddd;border-radius:4px;font-size:0.95rem}
+.cloud-form .btn{align-self:flex-start}
 </style>
 </head>
 <body>
@@ -168,9 +138,14 @@ h1{font-size:1.5rem;color:#222}
 </header>
 {%with messages=get_flashed_messages(with_categories=true)%}{%if messages%}<div class="flash-messages">{%for category,message in messages%}<div class="flash {{category}}">{{message}}</div>{%endfor%}</div>{%endif%}{%endwith%}
 <div class="card"><h2>Status</h2><div class="status-info"><div class="status-item"><span class="status-label">Battery</span><span class="status-value">{{battery}}%</span></div><div class="status-item"><span class="status-label">Books</span><span class="status-value">{{books|length}}</span></div><div class="status-item"><span class="status-label">Running on Pi</span><span class="status-value">{{"Yes" if is_pi else "No"}}</span></div></div></div>
+<div class="card"><h2>Cloud (WebDAV)</h2><form action="{{url_for("cloud_settings")}}" method="post" class="cloud-form"><label>Folder URL<input type="url" name="url" value="{{cloud.url}}" placeholder="https://cloud.example.com/remote.php/dav/files/USER/Books"></label><label>User<input type="text" name="user" value="{{cloud.user}}" autocomplete="username"></label><label>Password / app password<input type="password" name="password" placeholder="{{"(unchanged)" if cloud.has_password else ""}}" autocomplete="new-password"></label><button type="submit" class="btn">Save &amp; test</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Shows up as [Cloud] on the reader. Books download when you open them. Leave the URL empty to turn it off. For Nextcloud, use an app password.</p></div>
+<div class="card"><h2>Reading progress sync (KOReader / Koodo)</h2><form action="{{url_for("kosync_settings")}}" method="post" class="cloud-form"><label>Sync server URL<input type="url" name="url" value="{{kosync.url}}" placeholder="https://sync.koreader.rocks"></label><label>User<input type="text" name="user" value="{{kosync.user}}" autocomplete="username"></label><label>Password<input type="password" name="password" placeholder="{{"(unchanged)" if kosync.configured else ""}}" autocomplete="new-password"></label><label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="register"> Create this account on the server</label><button type="submit" class="btn">Save &amp; test</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Use the same server and login in Koodo Reader under Settings &gt; "Auto sync reading progress with KOReader". EPUBs only. Leave the URL empty to turn it off.</p></div>
+<div class="card"><h2>Reader settings</h2><form action="{{url_for("save_settings")}}" method="post" class="cloud-form">{%for s in reader_settings%}<label>{{s.label}}<select name="{{s.key}}">{%for v,text in s.options%}<option value="{{v}}" {{"selected" if v==s.value}}>{{text}}</option>{%endfor%}</select></label>{%endfor%}<button type="submit" class="btn">Save</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Also on the reader: [Settings] at the bottom of the home screen. Changes apply right away; changing the font re-flows the open book and keeps your place. Drop extra .ttf/.otf files in the fonts/ folder to add fonts.</p></div>
 <div class="card"><h2>Screensaver</h2><div class="screensaver">{%if screensaver%}<div class="screensaver-thumb"><img src="{{url_for("screensaver_file",filename=screensaver_filename)}}" alt="Current screensaver"></div><div><p style="margin-bottom:12px">Current screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Change Screensaver</button></form></div>{%else%}<div class="empty-state" style="padding:20px;text-align:left"><p style="margin-bottom:12px">No screensaver set</p><form action="{{url_for("screensaver")}}" method="post" enctype="multipart/form-data"><input type="file" name="image" accept=".png,.jpg,.jpeg,.gif,.bmp" style="margin-bottom:12px"><button type="submit" class="btn">Set Screensaver</button></form></div>{%endif%}</div></div>
-<div class="card"><h2>Library ({{books|length}} books)</h2>{%if books%}<ul class="file-list">{%for book in books%}<li class="file-item"><div class="file-info"><span class="file-ext {{book.extension[1:]}}">{{book.extension[1:]}}</span><span class="file-name">{{book.name}}</span><span class="file-size">{{book.size_formatted}}</span></div><form action="{{url_for("delete_file",filename=book.name)}}" method="post"><button type="submit" class="delete-btn" onclick="return confirm("Delete {{book.name}}?")">Delete</button></form></li>{%endfor%}</ul>{%else%}<div class="empty-state"><p>No books in library</p><p style="font-size:0.85rem;margin-top:8px">Upload .txt, .epub, or .pdf files below</p></div>{%endif%}</div>
-<div class="card"><h2>Upload Books</h2><form action="{{url_for("upload")}}" method="post" enctype="multipart/form-data" class="upload-form"><input type="file" name="file" accept=".txt,.epub,.pdf" required><button type="submit" class="btn">Upload</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Supported formats: .txt, .epub, .pdf (max 50MB)</p></div>
+<div class="card"><h2>Library ({{books|length}} books)</h2>{%if books%}<ul class="file-list">{%for book in books%}<li class="file-item"><div class="file-info"><span class="file-ext {{book.extension[1:]}}">{{book.extension[1:]}}</span><span class="file-name">{{book.name}}</span><span class="file-size">{{book.size_formatted}}</span></div><form action="{{url_for("delete_file",filename=book.name)}}" method="post"><button type="submit" class="delete-btn" onclick="return confirm('Delete ' + this.dataset.name + '?')" data-name="{{book.name}}">Delete</button></form></li>{%endfor%}</ul>{%else%}<div class="empty-state"><p>No books in library</p><p style="font-size:0.85rem;margin-top:8px">Upload .txt, .md, .epub, or .pdf files below</p></div>{%endif%}</div>
+<div class="card"><h2>Power</h2><form action="{{url_for("shutdown")}}" method="post"><button type="submit" class="btn" style="background:#c62828" onclick="return confirm('Shut down the reader?')">Shut down</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Saves your place and powers off. Same as holding the GPIO button for 3 s.</p></div>
+<div class="card"><h2>Downloaded from Cloud ({{downloads|length}})</h2>{%if downloads%}<ul class="file-list">{%for d in downloads%}<li class="file-item"><div class="file-info"><span class="file-ext {{d.extension[1:]}}">{{d.extension[1:]}}</span><span class="file-name">{{d.title}}</span><span class="file-size">{{d.size_formatted}}</span></div><form action="{{url_for("delete_download")}}" method="post"><input type="hidden" name="path" value="{{d.rel}}"><button type="submit" class="delete-btn" onclick="return confirm('Remove the downloaded copy of ' + this.dataset.name + '? It stays in the cloud; reading progress is kept.')" data-name="{{d.title}}">Remove</button></form></li>{%endfor%}</ul><p style="margin-top:12px;font-size:0.85rem;color:#666">Total {{downloads_total}}. Removing only frees space on the reader; the book stays in the cloud and progress is kept.</p>{%else%}<div class="empty-state" style="padding:20px"><p>Nothing downloaded</p></div>{%endif%}</div>
+<div class="card"><h2>Upload Books</h2><form action="{{url_for("upload")}}" method="post" enctype="multipart/form-data" class="upload-form"><input type="file" name="file" multiple accept=".txt,.md,.epub,.pdf" required><button type="submit" class="btn">Upload</button></form><p style="margin-top:12px;font-size:0.85rem;color:#666">Supported formats: .txt, .md, .epub, .pdf (max {{max_mb}}MB)</p></div>
 </div>
 </body>
 </html>
@@ -186,6 +161,7 @@ def index():
     books = get_library_files()
     for book in books:
         book["size_formatted"] = format_file_size(book["size"])
+    downloads = get_downloads()
     screensaver = get_current_screensaver()
     screensaver_filename = os.path.basename(screensaver) if screensaver else None
     return render_template_string(
@@ -195,33 +171,149 @@ def index():
         screensaver=screensaver,
         screensaver_filename=screensaver_filename,
         is_pi=IS_PI,
+        max_mb=MAX_UPLOAD_MB,
+        cloud=_cloud_view(),
+        downloads=downloads,
+        downloads_total=format_file_size(sum(d["size"] for d in downloads)),
+        kosync=_kosync_view(),
+        reader_settings=_settings_view(),
     )
+
+
+def _kosync_view():
+    import kosync
+
+    s = kosync.load_settings() or {}
+    return {"url": s.get("url", ""), "user": s.get("user", ""), "configured": bool(s)}
+
+
+def _settings_view():
+    import settings as sm
+
+    st = sm.Settings()
+    return [{"key": k, "label": sm.SPEC[k][0], "value": str(st.get(k)),
+             "options": [(str(v), sm.describe(k, v)) for v in sm.choices(k)]}
+            for k in sm.ORDER]
+
+
+@app.route("/settings", methods=["POST"])
+def save_settings():
+    import settings as sm
+
+    st = sm.Settings()
+    for k in sm.ORDER:
+        raw = request.form.get(k)
+        if raw is None:
+            continue
+        match = next((v for v in sm.choices(k) if str(v) == raw), None)
+        if match is None:
+            flash(f"Invalid value for {sm.SPEC[k][0]}", "error")
+            return redirect(url_for("index"))
+        if match != st.get(k):
+            st.set(k, match)
+    flash("Settings saved", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/kosync", methods=["POST"])
+def kosync_settings():
+    import kosync
+    from config import KOSYNC_SETTINGS_FILE
+
+    url = request.form.get("url", "").strip().rstrip("/")
+    user = request.form.get("user", "").strip()
+    password = request.form.get("password", "")
+    if not url:
+        try:
+            os.remove(KOSYNC_SETTINGS_FILE)
+        except FileNotFoundError:
+            pass
+        flash("Progress sync turned off", "success")
+        return redirect(url_for("index"))
+    if not url.startswith(("http://", "https://")) or not user:
+        flash("Need a server URL (https://...) and a user", "error")
+        return redirect(url_for("index"))
+    old = kosync.load_settings() or {}
+    if password:
+        key = kosync.password_key(password)
+    elif old.get("user") == user and old.get("key"):
+        key = old["key"]  # blank keeps the saved password
+    else:
+        flash("Enter the password", "error")
+        return redirect(url_for("index"))
+    client = kosync.KoSyncClient(url, user, key)
+    try:
+        if request.form.get("register"):
+            client.register()
+            flash(f"Registered {user} on the sync server", "success")
+        client.auth()
+    except kosync.KoSyncError as e:
+        flash(f"Not saved: {e}", "error")
+        return redirect(url_for("index"))
+    kosync.save_settings(url, user, key)
+    flash("Saved. Connected to the sync server.", "success")
+    return redirect(url_for("index"))
+
+
+def _cloud_view():
+    from webdav import load_settings
+
+    s = load_settings() or {}
+    return {"url": s.get("url", ""), "user": s.get("user", ""),
+            "has_password": bool(s.get("password"))}
+
+
+@app.route("/cloud", methods=["POST"])
+def cloud_settings():
+    from config import WEBDAV_SETTINGS_FILE
+    from webdav import WebDAVClient, WebDAVError, load_settings, save_settings
+
+    url = request.form.get("url", "").strip()
+    user = request.form.get("user", "").strip()
+    password = request.form.get("password", "")
+    if not url:
+        try:
+            os.remove(WEBDAV_SETTINGS_FILE)
+        except FileNotFoundError:
+            pass
+        flash("Cloud turned off", "success")
+        return redirect(url_for("index"))
+    if not url.startswith(("http://", "https://")):
+        flash("URL must start with https:// (or http://)", "error")
+        return redirect(url_for("index"))
+    if not password:  # blank keeps the saved one
+        password = (load_settings() or {}).get("password", "")
+    save_settings(url, user, password)
+    try:
+        entries = WebDAVClient(url, user, password).list("")
+        flash(f"Saved. Connected: {len(entries)} item(s) in that folder.", "success")
+    except WebDAVError as e:
+        flash(f"Saved, but the test failed: {e}", "error")
+    return redirect(url_for("index"))
 
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    if "file" not in request.files:
+    files = [f for f in request.files.getlist("file") if f and f.filename]
+    if not files:
         flash("No file selected", "error")
         return redirect(url_for("index"))
-    file = request.files["file"]
-    if file.filename == "":
-        flash("No file selected", "error")
-        return redirect(url_for("index"))
-    _, ext = os.path.splitext(file.filename.lower())
-    if ext not in SUPPORTED_EXTENSIONS:
-        flash(f"Unsupported file type: {ext}", "error")
-        return redirect(url_for("index"))
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    if os.path.exists(filepath):
+    ensure_directory(UPLOAD_FOLDER)
+    for file in files:
+        _, ext = os.path.splitext(file.filename.lower())
+        if ext not in SUPPORTED_EXTENSIONS:
+            flash(f"Skipped {file.filename}: unsupported type {ext}", "error")
+            continue
+        filename = secure_filename(file.filename) or f"upload{ext}"
         base, ext = os.path.splitext(filename)
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
         counter = 1
         while os.path.exists(filepath):
             filename = f"{base}_{counter}{ext}"
             filepath = os.path.join(UPLOAD_FOLDER, filename)
             counter += 1
-    file.save(filepath)
-    flash(f"Uploaded {filename} successfully", "success")
+        file.save(filepath)
+        flash(f"Uploaded {filename}", "success")
     return redirect(url_for("index"))
 
 
@@ -241,30 +333,15 @@ def screensaver():
     ensure_directory(SCREENSAVER_FOLDER)
     filename = f"screensaver{ext}"
     filepath = os.path.join(SCREENSAVER_FOLDER, filename)
-    if os.path.exists(filepath):
-        os.remove(filepath)
     file.save(filepath)
 
-    try:
-        from PIL import Image
-
-        from display import HEIGHT, WIDTH, EPaperDisplay
-
-        display = EPaperDisplay(debug_mode=False)
-        if display.initialized:
-            img = Image.open(filepath)
-            img = img.resize((WIDTH, HEIGHT), Image.LANCZOS)
-            display.show(img, partial=False)
-            time.sleep(2)
-            display.clear()
-            display.sleep()
-            flash("Screensaver set and shown on display", "success")
-        else:
-            flash("Screensaver saved (display not available)", "success")
-    except Exception as e:
-        logger.error(f"Display update failed: {e}")
-        flash("Screensaver saved", "success")
-
+    for old_ext in IMAGE_EXTENSIONS:  # only keep one screensaver
+        old = os.path.join(SCREENSAVER_FOLDER, "screensaver" + old_ext)
+        if old != filepath and os.path.exists(old):
+            os.remove(old)
+    # The reader shows it on idle/shutdown. Don't touch the panel from here:
+    # the main loop owns it, and a second driver instance fights over SPI/GPIO.
+    flash("Screensaver saved", "success")
     return redirect(url_for("index"))
 
 
@@ -277,20 +354,67 @@ def screensaver_file(filename):
 
 @app.route("/delete/<path:filename>", methods=["POST"])
 def delete_file(filename):
-    safe_name = secure_filename(filename)
-    filepath = os.path.join(UPLOAD_FOLDER, safe_name)
-    if not os.path.exists(filepath):
+    names = {f["name"] for f in get_library_files()}
+    if filename not in names:
         flash("File not found", "error")
         return redirect(url_for("index"))
-    if not os.path.isfile(filepath):
-        flash("Cannot delete directories", "error")
+    try:
+        os.remove(os.path.join(UPLOAD_FOLDER, filename))
+        flash(f"Deleted {filename}", "success")
+    except OSError as e:
+        flash(f"Error deleting file: {e}", "error")
+    return redirect(url_for("index"))
+
+
+def _cloud():
+    from cloud import CloudSource
+
+    return CloudSource(UPLOAD_FOLDER)
+
+
+def get_downloads():
+    """Downloaded cloud books with titles (cached Koodo names, no network)."""
+    cloud = _cloud()
+    items = []
+    for rel in cloud.downloaded_books(UPLOAD_FOLDER):
+        full = os.path.join(UPLOAD_FOLDER, rel)
+        name = os.path.basename(rel)
+        title = cloud.title_for(os.path.dirname(full), name, fetch=False) or name
+        size = os.path.getsize(full)
+        items.append({"rel": rel, "title": title, "size": size,
+                      "size_formatted": format_file_size(size),
+                      "extension": os.path.splitext(name)[1].lower()})
+    return sorted(items, key=lambda d: d["title"].lower())
+
+
+@app.route("/downloads/delete", methods=["POST"])
+def delete_download():
+    rel = request.form.get("path", "")
+    match = next((d for d in get_downloads() if d["rel"] == rel), None)
+    if match is None:  # only paths we listed: no traversal
+        flash("Download not found", "error")
         return redirect(url_for("index"))
     try:
-        os.remove(filepath)
-        flash(f"Deleted {safe_name} successfully", "success")
-    except Exception as e:
-        flash(f"Error deleting file: {str(e)}", "error")
+        _cloud().delete_download(os.path.join(UPLOAD_FOLDER, rel))
+        flash(f"Removed {match['title']} from the reader", "success")
+    except (OSError, ValueError) as e:
+        flash(f"Couldn't remove it: {e}", "error")
     return redirect(url_for("index"))
+
+
+@app.errorhandler(413)
+def too_large(_):
+    flash(f"File too large (max {MAX_UPLOAD_MB}MB)", "error")
+    return redirect(url_for("index"))
+
+
+@app.route("/shutdown", methods=["POST"])
+def shutdown():
+    if ACTION_QUEUE is None:
+        flash("Reader app isn't running", "error")
+        return redirect(url_for("index"))
+    ACTION_QUEUE.put("shutdown")
+    return "<p style='font-family:sans-serif'>Shutting down. You can close this page.</p>"
 
 
 @app.route("/status")
@@ -298,7 +422,6 @@ def status():
     return jsonify(
         {
             "battery": get_battery_percentage(),
-            "page_count": get_page_count(),
             "is_pi": IS_PI,
             "library_path": UPLOAD_FOLDER,
             "cache_dir": SCREENSAVER_FOLDER,
@@ -313,4 +436,5 @@ if __name__ == "__main__":
     logger.info(f"Library path: {UPLOAD_FOLDER}")
     logger.info(f"Cache dir: {SCREENSAVER_FOLDER}")
     logger.info(f"Running on Pi: {IS_PI}")
+    logging.basicConfig(level=logging.INFO)
     app.run(host="0.0.0.0", port=5000, debug=False)
