@@ -51,6 +51,9 @@ GPIO button, set `BUTTON_GPIO` to its BCM number.
 - Web UI on port 5000 for uploading and deleting books, removing downloaded copies, setting the
   screensaver, configuring cloud and sync, and shutting down.
 - Screensaver after 5 minutes idle, powers off after 15 (configurable, skipped while charging).
+  The lock screen is labelled "Sleeping", "Powered off" (auto power off) or "Shut down", so you
+  can tell whether a press will wake it or it needs the power button. Without a screensaver image
+  the label goes on whatever was on screen.
 
 ## Controls
 

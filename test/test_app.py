@@ -330,7 +330,7 @@ def test_auto_power_off_after_idle(app, monkeypatch):
     assert calls == [] and app.idle  # screensaver at 5 min, not off yet
     app.last_activity = time.monotonic() - 15 * 60
     app._check_idle()
-    assert calls == [{"show_screen": False}]  # screensaver already up
+    assert calls == [{"status": main.STATUS_POWERED_OFF}]
 
 
 def test_no_auto_power_off_while_charging(app, monkeypatch):
@@ -434,3 +434,67 @@ def test_footer_shows_percentage(app):
     assert page_label(0, 5) == "1/5 0%"
     assert page_label(2, 5) == "3/5 50%"
     assert page_label(4, 5) == "5/5 100%"
+
+
+def _label_pixels(img):
+    """Pixels of the bottom-centre strip where the status label goes."""
+    img = img.convert("L")
+    return img.crop((img.width // 2 - 40, img.height - 16, img.width // 2 + 40, img.height))
+
+
+def test_lock_screen_labels(app, monkeypatch):
+    from PIL import ImageChops
+
+    from display import stamp_status
+
+    shown = []
+    monkeypatch.setattr(app.display, "sleep", lambda: None)
+    real_show = app.display.show
+
+    def show(img, **k):
+        shown.append((img.copy(), k))
+        real_show(img, **k)
+
+    monkeypatch.setattr(app.display, "show", show)
+    monkeypatch.setattr(main.pisugar, "is_plugged_in", lambda: False)
+
+    # Idle: "Sleeping" stamped on the current screen (no screensaver set).
+    base = app.display.last_frame.copy()
+    app.last_activity = time.monotonic() - 6 * 60
+    app._check_idle()
+    img, kw = shown[-1]
+    assert kw.get("force_full")
+    expect = stamp_status(base, main.STATUS_SLEEPING, app.small_font)
+    assert ImageChops.difference(img.convert("L"), expect).getbbox() is None
+
+    # Auto power off: relabelled from the same base, labels don't stack.
+    app.settings.set("auto_power_off", 15)
+    app.last_activity = time.monotonic() - 16 * 60
+    app._check_idle()
+    img, _ = shown[-1]
+    expect = stamp_status(base, main.STATUS_POWERED_OFF, app.small_font)
+    assert ImageChops.difference(img.convert("L"), expect).getbbox() is None
+
+
+def test_manual_shutdown_label(app, monkeypatch):
+    from PIL import ImageChops
+
+    from display import stamp_status
+
+    base = app.display.last_frame.copy()
+    shown = []
+    monkeypatch.setattr(app.display, "show", lambda img, **k: shown.append(img.copy()))
+    app._shutdown()
+    expect = stamp_status(base, main.STATUS_SHUT_DOWN, app.small_font)
+    assert ImageChops.difference(shown[-1].convert("L"), expect).getbbox() is None
+
+
+def test_lock_screen_label_on_screensaver(app, monkeypatch):
+    from PIL import Image
+
+    Image.new("L", (300, 150), 0).save(os.path.join(config.CACHE_DIR, "screensaver.png"))
+    shown = []
+    monkeypatch.setattr(app.display, "show", lambda img, **k: shown.append(img.copy()))
+    app._shutdown(status=main.STATUS_POWERED_OFF)
+    strip = _label_pixels(shown[-1])
+    assert 255 in strip.getdata() and 0 in strip.getdata()  # white label on black art

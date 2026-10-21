@@ -90,6 +90,22 @@ def border_tone(gray, alpha=None):
     return 0 if tone < 64 else 255 if tone > 192 else tone
 
 
+def stamp_status(image, text, font):
+    """Draw a small boxed label (e.g. "Sleeping") at the bottom centre of a
+    lock-screen image. White box with a black border, so it reads on any art."""
+    image = image.convert("L")
+    draw = new_draw(image)
+    pad_x, pad_y = 5, 2
+    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+    w, h = right - left, bottom - top
+    box_w, box_h = w + 2 * pad_x, h + 2 * pad_y
+    x0 = (image.width - box_w) // 2
+    y0 = image.height - box_h - 2
+    draw.rectangle([x0, y0, x0 + box_w - 1, y0 + box_h - 1], fill=255, outline=0)
+    draw.text((x0 + pad_x - left, y0 + pad_y - top), text, fill=0, font=font)
+    return image
+
+
 def fit_screensaver(image, size=None):
     """Scale an image to fit the screen and fill the leftover bars with the
     image's own background tone (dark art gets dark bars, not white)."""
@@ -139,6 +155,7 @@ class EPaperDisplay:
         # with force_full=True (opening a book). A full refresh still happens
         # when the panel has no valid base frame (first frame, after sleep).
         self.speed_mode = False
+        self.last_frame = None  # last image pushed (1-bit, screen orientation)
         self.supports_partial = mock or DISPLAY_DRIVER == "epd2in13_V4"
         if mock:
             self.initialized = True
@@ -181,6 +198,7 @@ class EPaperDisplay:
         if image.size != (WIDTH, HEIGHT):
             image = image.resize((WIDTH, HEIGHT), Image.LANCZOS)
         image = self.to_1bit(image, dither)
+        self.last_frame = image
 
         can_partial = self.supports_partial and self._base_valid and not force_full
         if self.speed_mode:
