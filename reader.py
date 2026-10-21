@@ -38,6 +38,13 @@ def cached_battery(max_age=60):
     return _battery_cache["value"]
 
 
+def page_label(current, total):
+    """Footer text like "12/84 14%" (current is 0-based). Percentage is by
+    pages, so it reaches 100% on the last page."""
+    pct = 100 if total <= 1 else round(100 * current / (total - 1))
+    return f"{current + 1}/{total} {pct}%"
+
+
 def draw_footer(draw, font, left_text, right_text):
     y = DISPLAY_HEIGHT - FOOTER_HEIGHT
     draw.line([(0, y - 1), (DISPLAY_WIDTH, y - 1)], fill=0)
@@ -254,6 +261,6 @@ class TextReader:
 
         battery = cached_battery()
         left = f"{battery}%" if battery is not None else ""
-        right = f"{self.current_page + 1}/{len(self.pages)}"
+        right = page_label(self.current_page, len(self.pages))
         draw_footer(draw, self.footer_font, left, right)
         return image

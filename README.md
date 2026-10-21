@@ -42,10 +42,18 @@ GPIO button, set `BUTTON_GPIO` to its BCM number.
   Reader's WebDAV folder it shows real titles instead of Koodo's numbered filenames.
 - Syncs reading progress with Koodo Reader or KOReader through a KOReader sync server (EPUB only).
 - Settings on the device or in the web UI: font (Mono, Sans, Serif, or any .ttf/.otf you put in
-  `fonts/`), text size, how often pages and menus do a full refresh, and auto power off.
+  `fonts/`), text size, how often pages and menus do a full refresh, auto power off, and speed
+  mode.
+- Speed mode: the only full refresh is when you open a book. Page turns, menus and messages all
+  use the fast partial refresh. Expect more ghosting; reopening the book clears it. The first
+  frame after the screen sleeps is still full, because the panel forgets its last image.
+- The footer shows the page number and how far through the book you are (by page).
 - Web UI on port 5000 for uploading and deleting books, removing downloaded copies, setting the
   screensaver, configuring cloud and sync, and shutting down.
 - Screensaver after 5 minutes idle, powers off after 15 (configurable, skipped while charging).
+  The lock screen is labelled "Sleeping", "Powered off" (auto power off) or "Shut down", so you
+  can tell whether a press will wake it or it needs the power button. Without a screensaver image
+  the label goes on whatever was on screen.
 
 ## Controls
 
@@ -62,8 +70,10 @@ button does the first three rows. Without a GPIO button you can shut down from S
 web UI.
 
 The file list uses partial refresh, so moving around is quick. Book pages get a full refresh on
-every turn by default; you can trade some ghosting for speed in Settings. When the screensaver is
-showing, the first press just wakes it.
+every turn by default; you can trade some ghosting for speed in Settings ("Book refresh"), or turn
+on Speed mode to drop full refreshes everywhere except opening a book. When the screen says
+"Sleeping", the first press just wakes it. "Powered off" or "Shut down" means the Pi is off; press
+the PiSugar button to boot it.
 
 ## Setup
 
@@ -135,27 +145,37 @@ Things to know:
 
 The Pi Zero can't suspend; Linux has no sleep mode for its chip, so idle still draws roughly
 0.4-0.6 W. That's about 7-9 hours on a 1200 mAh PiSugar 2. Auto power off is what makes a charge
-last: the e-ink keeps showing the screensaver with no power, and the PiSugar button boots it back
-into the book you were reading.
+last: the e-ink keeps showing the screensaver (labelled "Powered off") with no power, and the
+PiSugar button boots it back into the book you were reading.
 
 Boot time depends mostly on what else the OS starts. A stock Raspberry Pi OS image runs a lot
-that a reader doesn't need. Things worth turning off:
+that a reader doesn't need. `scripts/trim-pi.sh` turns it off: audio, Bluetooth, mDNS
+(`<hostname>.local`), cloud-init, apt's background timers, ModemManager, udisks2 and a few others,
+plus camera/display probing and the activity LED in `config.txt`. Wi-Fi, SSH, time sync,
+pisugar-server and swap are left alone.
 
 ```bash
-sudo touch /etc/cloud/cloud-init.disabled
-sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
-sudo systemctl mask udisks2.service accounts-daemon.service rpi-resize-swap-file.service
+sudo scripts/trim-pi.sh --dry-run   # show what it would change
+sudo scripts/trim-pi.sh             # apply, then reboot
+sudo scripts/trim-pi.sh --revert    # undo
 ```
+
+`--keep-bluetooth` and `--keep-avahi` skip those parts. Units are masked, not just disabled,
+because several get started on demand otherwise. What it changed is recorded in
+`/var/lib/pireader-trim/`, and `config.txt` is backed up first.
+
+An earlier version of the script also masked `rpi-resize-swap-file`, which leaves the Pi with no
+swap (see Troubleshooting). Running the current script again unmasks it; reboot afterwards and
+check that `free -m` shows swap.
 
 Use `systemd-analyze blame` and `systemd-analyze critical-chain ereader.service` to see what's
 still slow.
 
-Optional power savings in `/boot/firmware/config.txt`:
+Optional extra power savings in `/boot/firmware/config.txt` (not in the script: underclocking
+makes opening books slower):
 
 ```
-dtparam=act_led_trigger=none
 dtparam=act_led_activelow=on
-dtoverlay=disable-bt
 arm_freq=700
 ```
 
@@ -163,6 +183,46 @@ HDMI can be turned off by appending `video=HDMI-A-1:d` to `/boot/firmware/cmdlin
 
 After shutdown the PiSugar should cut power on its own. If its LEDs are still on a minute later,
 the halted Pi is still drawing 20-30 mA.
+
+## Troubleshooting
+
+**The whole Pi freezes or reboots when opening a big book.** It's out of memory. The Zero W has
+512 MB, of which the GPU reserves part by default (`free -m` shows the rest as "total", e.g.
+426), and a large parsed book takes a lot of it. Without swap the system thrashes and locks up
+instead of just killing the reader. Check:
+
+```bash
+free -m                    # the Swap line must not be 0
+vcgencmd get_throttled     # 0x0 = power is fine; anything else is undervoltage
+```
+
+Fixes, in order:
+
+- Restore swap if it's 0: `sudo systemctl unmask rpi-resize-swap-file && sudo reboot`.
+- Give the GPU's RAM back (nothing here uses it): add `gpu_mem=16` to `/boot/firmware/config.txt`
+  and reboot. Frees about 70 MB.
+- Optionally use compressed swap in RAM instead of the SD card: `sudo apt install zram-tools`,
+  then `PERCENT=50` in `/etc/default/zramswap`.
+- So a runaway book kills only the reader and not the Pi, add `MemoryMax=300M` under `[Service]`
+  in `ereader.service`.
+
+The journal lives in RAM by default, so logs from a crash are gone after the reboot. Make it
+persistent first with `sudo mkdir -p /var/log/journal && sudo systemctl restart systemd-journald`,
+then read the previous boot with `journalctl -b -1`.
+
+**Opening a book the first time is slow.** The first open parses the whole EPUB and paginates it;
+later opens load both from `cache/`. Changing the font or text size re-paginates once per layout.
+
+**Boot takes minutes.** Expect about a minute on a Zero W. Much longer usually means something is
+hitting systemd's 90 s timeout:
+
+```bash
+systemd-analyze blame | head -15
+journalctl -b --no-pager | grep -iE "timed out|start job|dependency failed"
+```
+
+A stale `/etc/fstab` entry or a wait-online unit are the usual causes. If nothing times out, try
+another SD card; `dmesg | grep -i mmc` shows card errors.
 
 ## Development
 

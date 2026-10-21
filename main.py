@@ -44,7 +44,7 @@ from config import (
 import pisugar
 import settings as settings_mod
 from cloud import CloudSource
-from display import EPaperDisplay, fit_screensaver, load_font, new_draw
+from display import EPaperDisplay, fit_screensaver, load_font, new_draw, stamp_status
 from documents import file_key, load_book, load_text
 from file_browser import FileBrowser
 from kosync import SyncWorker, partial_md5
@@ -62,6 +62,11 @@ SCREENSAVER_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
 # Shutdown is a >=3s hold on the GPIO button. The PiSugar button only gives
 # 1 tap, 2 taps and long press (no triple, no shutdown).
 GESTURES = {1: "next", 2: "prev", 3: "triple", "long": "long", "hold": "shutdown"}
+
+# Label left on the lock screen (it stays visible with the power off).
+STATUS_SLEEPING = "Sleeping"
+STATUS_POWERED_OFF = "Powered off"
+STATUS_SHUT_DOWN = "Shut down"
 
 
 class AppMode(Enum):
@@ -90,6 +95,7 @@ class Application:
         self.doc_id = None  # KOReader document hash of the open EPUB
         self._remote_applied = None
         self._last_screen = None  # (mode, file) on the panel; None after a message/screensaver
+        self._lock_base = self._lock_frame = None  # lock screen without / with its label
         self.settings = settings_mod.Settings()
         self.settings_cursor = 0
         self.confirm_shutdown = False
@@ -214,6 +220,7 @@ class Application:
     def _apply_settings(self):
         """(Re)build fonts and the reader from the current settings, keeping
         the reading position if a book is open."""
+        self.display.speed_mode = self.settings.get("speed_mode")
         face, size = self.settings.get("font"), self.settings.get("font_size")
         self.font_size = size
         self.font = load_font(size, face)
@@ -258,7 +265,7 @@ class Application:
                 return
             key = settings_mod.ORDER[self.settings_cursor]
             self.settings.cycle(key)
-            if key in ("font", "font_size"):
+            if key in ("font", "font_size", "speed_mode"):
                 self._apply_settings()
 
     def _render_settings(self):
@@ -603,7 +610,7 @@ class Application:
             logger.info("Idle, showing screensaver")
             self.idle = True
             self.sync.flush()
-            self._show_screensaver()
+            self._show_lock_screen(STATUS_SLEEPING)
             self.display.sleep()
         minutes = self.settings.get("auto_power_off")
         if minutes and idle_for >= minutes * 60 and time.monotonic() >= self._next_power_check:
@@ -611,7 +618,7 @@ class Application:
                 self._next_power_check = time.monotonic() + 300  # look again in 5 min
                 return
             logger.info(f"Idle {minutes} min, powering off")
-            self._shutdown(show_screen=not self.idle)  # screensaver may already be up
+            self._shutdown(status=STATUS_POWERED_OFF)
 
     def _idle_wait(self):
         """How long the main loop can sleep before an idle deadline (fewer wakeups)."""
@@ -625,12 +632,14 @@ class Application:
                                  self._next_power_check - time.monotonic()))
         return max(1.0, min(deadlines + [60.0]))
 
-    def _shutdown(self, show_screen=True):
-        logger.info("Shutting down")
+    def _shutdown(self, status=None):
+        """status is the label left on the lock screen: STATUS_SHUT_DOWN for a
+        manual shutdown, STATUS_POWERED_OFF for the idle auto power off."""
+        status = status or STATUS_SHUT_DOWN
+        logger.info(f"Shutting down ({status})")
         self._save_progress()
         # Screen first so it's obvious something is happening, then finish syncing.
-        if show_screen and not self._show_screensaver():
-            self._show_message("Powered off")
+        self._show_lock_screen(status)
         self.sync.flush(timeout=5)
         if self.display.mock or not SHUTDOWN_COMMANDS:
             self.running = False
@@ -671,19 +680,34 @@ class Application:
                 return path
         return None
 
-    def _show_screensaver(self):
+    def _show_lock_screen(self, status):
+        """Screensaver (or, without one, whatever was on screen) with a label
+        saying what state the device is in. It stays visible with no power."""
+        canvas, dither = None, False
         path = self._screensaver_path()
-        if not path:
-            return False
+        if path:
+            try:
+                with Image.open(path) as img:
+                    canvas = fit_screensaver(img)
+                # Dither the art first, so the label stays crisp on top.
+                canvas = EPaperDisplay.to_1bit(canvas, dither=True)
+            except Exception as e:
+                logger.error(f"Failed to load screensaver: {e}")
+                canvas = None
+        if canvas is None:
+            canvas = self.display.last_frame
+            if canvas is not None and canvas is self._lock_frame:
+                canvas = self._lock_base  # already a lock screen: relabel, don't stack labels
+            if canvas is None:
+                canvas = self.display.create_canvas()
+        self._lock_base = canvas
         try:
-            with Image.open(path) as img:
-                canvas = fit_screensaver(img)
-            self.display.show(canvas, dither=True)
-            self._last_screen = None
-            return True
+            self.display.show(stamp_status(canvas, status, self.small_font),
+                              dither=dither, force_full=True)
         except Exception as e:
-            logger.error(f"Failed to show screensaver: {e}")
-            return False
+            logger.error(f"Failed to show lock screen: {e}")
+        self._lock_frame = self.display.last_frame
+        self._last_screen = None
 
     def _show_message(self, text, partial=False):
         img = self.display.create_canvas()
@@ -713,8 +737,11 @@ class Application:
         else:
             img = self._active_reader().render()
             limit = self.settings.get("book_full_refresh_every") - 1
+        # Entering a book (or switching PDF text/image) clears the ghosting;
+        # in speed mode that is the only full refresh.
+        entering_book = not partial and self.mode in (AppMode.READER, AppMode.PDF_IMAGE)
         self.display.show(img, dither=self.mode == AppMode.PDF_IMAGE,
-                          partial=partial, limit=limit)
+                          partial=partial, limit=limit, force_full=entering_book)
         self._last_screen = screen
 
     def _render_browser(self):

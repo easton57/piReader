@@ -330,7 +330,7 @@ def test_auto_power_off_after_idle(app, monkeypatch):
     assert calls == [] and app.idle  # screensaver at 5 min, not off yet
     app.last_activity = time.monotonic() - 15 * 60
     app._check_idle()
-    assert calls == [{"show_screen": False}]  # screensaver already up
+    assert calls == [{"status": main.STATUS_POWERED_OFF}]
 
 
 def test_no_auto_power_off_while_charging(app, monkeypatch):
@@ -365,3 +365,136 @@ def test_open_restarts_idle_clock(app, monkeypatch):
     act(app, "next", "long")
     assert app.mode == main.AppMode.READER
     assert time.monotonic() - app.last_activity < 5
+
+
+def test_speed_mode_only_full_refreshes_when_opening_a_book(app):
+    app.settings.set("speed_mode", True)
+    app._apply_settings()
+    assert app.display.speed_mode
+    seen = []
+
+    def step(*actions):
+        act(app, *actions)
+        seen.append(app.display.last_refresh)
+
+    step("next")                       # move in the list
+    step("prev")
+    step("next", "long")               # open the book
+    assert app.mode == main.AppMode.READER
+    opened = len(seen) - 1
+    for _ in range(12):
+        step("next")                   # page turns, past any refresh limit
+    step("long")                       # back to the list
+    for _ in range(25):
+        step("next")                   # past menu_full_refresh_every
+    app._show_message("A message")     # messages too
+    seen.append(app.display.last_refresh)
+    assert seen[opened] == "full"
+    assert [r for i, r in enumerate(seen) if i != opened] == ["partial"] * (len(seen) - 1)
+
+
+def test_speed_mode_still_full_after_display_sleep(app):
+    """The panel loses its base frame in deep sleep, so the first frame after
+    waking has to be full even in speed mode."""
+    app.settings.set("speed_mode", True)
+    app._apply_settings()
+    app.display._base_valid = False
+    act(app, "next")
+    assert app.display.last_refresh == "full"
+    act(app, "next")
+    assert app.display.last_refresh == "partial"
+
+
+def test_speed_mode_from_settings_screen(app):
+    act(app, "prev", "long")  # open Settings
+    while settings_key(app) != "speed_mode":
+        act(app, "next")
+    act(app, "long")
+    assert app.settings.get("speed_mode") is True and app.display.speed_mode
+    act(app, "long")
+    assert app.settings.get("speed_mode") is False and not app.display.speed_mode
+
+
+def settings_key(app):
+    import settings as sm
+    return sm.ORDER[app.settings_cursor] if app.settings_cursor < len(sm.ORDER) else None
+
+
+def test_speed_mode_off_by_default_and_webui_toggle(app):
+    assert app.settings.get("speed_mode") is False
+    import webui
+    webui.app.test_client().post("/settings", data={"speed_mode": "True"})
+    app._render()
+    assert app.display.speed_mode
+
+
+def test_footer_shows_percentage(app):
+    from reader import page_label
+    assert page_label(0, 1) == "1/1 100%"
+    assert page_label(0, 5) == "1/5 0%"
+    assert page_label(2, 5) == "3/5 50%"
+    assert page_label(4, 5) == "5/5 100%"
+
+
+def _label_pixels(img):
+    """Pixels of the bottom-centre strip where the status label goes."""
+    img = img.convert("L")
+    return img.crop((img.width // 2 - 40, img.height - 16, img.width // 2 + 40, img.height))
+
+
+def test_lock_screen_labels(app, monkeypatch):
+    from PIL import ImageChops
+
+    from display import stamp_status
+
+    shown = []
+    monkeypatch.setattr(app.display, "sleep", lambda: None)
+    real_show = app.display.show
+
+    def show(img, **k):
+        shown.append((img.copy(), k))
+        real_show(img, **k)
+
+    monkeypatch.setattr(app.display, "show", show)
+    monkeypatch.setattr(main.pisugar, "is_plugged_in", lambda: False)
+
+    # Idle: "Sleeping" stamped on the current screen (no screensaver set).
+    base = app.display.last_frame.copy()
+    app.last_activity = time.monotonic() - 6 * 60
+    app._check_idle()
+    img, kw = shown[-1]
+    assert kw.get("force_full")
+    expect = stamp_status(base, main.STATUS_SLEEPING, app.small_font)
+    assert ImageChops.difference(img.convert("L"), expect).getbbox() is None
+
+    # Auto power off: relabelled from the same base, labels don't stack.
+    app.settings.set("auto_power_off", 15)
+    app.last_activity = time.monotonic() - 16 * 60
+    app._check_idle()
+    img, _ = shown[-1]
+    expect = stamp_status(base, main.STATUS_POWERED_OFF, app.small_font)
+    assert ImageChops.difference(img.convert("L"), expect).getbbox() is None
+
+
+def test_manual_shutdown_label(app, monkeypatch):
+    from PIL import ImageChops
+
+    from display import stamp_status
+
+    base = app.display.last_frame.copy()
+    shown = []
+    monkeypatch.setattr(app.display, "show", lambda img, **k: shown.append(img.copy()))
+    app._shutdown()
+    expect = stamp_status(base, main.STATUS_SHUT_DOWN, app.small_font)
+    assert ImageChops.difference(shown[-1].convert("L"), expect).getbbox() is None
+
+
+def test_lock_screen_label_on_screensaver(app, monkeypatch):
+    from PIL import Image
+
+    Image.new("L", (300, 150), 0).save(os.path.join(config.CACHE_DIR, "screensaver.png"))
+    shown = []
+    monkeypatch.setattr(app.display, "show", lambda img, **k: shown.append(img.copy()))
+    app._shutdown(status=main.STATUS_POWERED_OFF)
+    strip = _label_pixels(shown[-1])
+    assert 255 in strip.getdata() and 0 in strip.getdata()  # white label on black art

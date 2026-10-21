@@ -13,7 +13,7 @@ from PIL import Image
 from config import DISPLAY_HEIGHT, DISPLAY_WIDTH, PDF_DPI
 from documents import file_key
 from display import load_font, new_draw
-from reader import draw_footer
+from reader import draw_footer, page_label
 
 logger = logging.getLogger(__name__)
 
@@ -103,5 +103,5 @@ class PDFReader:
             img = Image.new("L", (self.WIDTH, self.HEIGHT), 255)
             new_draw(img).text((6, 40), "Couldn't render page", fill=0, font=self.font)
         draw = new_draw(img)
-        draw_footer(draw, self.font, "PDF", f"{self.current_page + 1}/{self.page_count}")
+        draw_footer(draw, self.font, "PDF", page_label(self.current_page, self.page_count))
         return img
