@@ -135,6 +135,10 @@ class EPaperDisplay:
         self.last_refresh = None  # "full" | "partial" (for logs/tests)
         self._partials = 0
         self._base_valid = False  # panel RAM holds the last full frame
+        # Speed mode: every frame is a partial refresh unless show() is called
+        # with force_full=True (opening a book). A full refresh still happens
+        # when the panel has no valid base frame (first frame, after sleep).
+        self.speed_mode = False
         self.supports_partial = mock or DISPLAY_DRIVER == "epd2in13_V4"
         if mock:
             self.initialized = True
@@ -166,17 +170,23 @@ class EPaperDisplay:
             return gray.convert("1")
         return gray.point(lambda p: 255 if p > 160 else 0).convert("1", dither=Image.Dither.NONE)
 
-    def show(self, image, dither=False, partial=False, limit=PARTIAL_REFRESH_LIMIT):
+    def show(self, image, dither=False, partial=False, limit=PARTIAL_REFRESH_LIMIT,
+             force_full=False):
         """Push a frame. partial=True asks for a fast partial refresh, which is
         used only when the panel supports it, has a valid base frame, and fewer
-        than `limit` partials have happened since the last full refresh."""
+        than `limit` partials have happened since the last full refresh.
+        In speed mode, partial and limit are ignored: everything is partial
+        except force_full frames."""
         self.show_count += 1
         if image.size != (WIDTH, HEIGHT):
             image = image.resize((WIDTH, HEIGHT), Image.LANCZOS)
         image = self.to_1bit(image, dither)
 
-        use_partial = (partial and self.supports_partial and self._base_valid
-                       and self._partials < limit)
+        can_partial = self.supports_partial and self._base_valid and not force_full
+        if self.speed_mode:
+            use_partial = can_partial
+        else:
+            use_partial = can_partial and partial and self._partials < limit
         self.last_refresh = "partial" if use_partial else "full"
         if self.mock:
             image.save(MOCK_DISPLAY_PATH)

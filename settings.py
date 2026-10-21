@@ -24,6 +24,7 @@ SPEC = {
     "book_full_refresh_every": ("Book refresh", BOOK_FULL_REFRESH_EVERY, [1, 2, 3, 5, 8, 10]),
     "menu_full_refresh_every": ("Menu refresh", PARTIAL_REFRESH_LIMIT, [5, 10, 15, 20, 30]),
     "auto_power_off": ("Auto power off", AUTO_POWER_OFF_MINUTES, [5, 10, 15, 30, 60, 0]),
+    "speed_mode": ("Speed mode", False, [False, True]),
 }
 ORDER = list(SPEC)
 
@@ -37,6 +38,8 @@ def choices(key):
 
 
 def describe(key, value):
+    if key == "speed_mode":
+        return "on" if value else "off"
     if key == "book_full_refresh_every":
         return "full every page" if value == 1 else f"full every {value} pages"
     if key == "menu_full_refresh_every":
@@ -81,7 +84,10 @@ class Settings:
     def get(self, key):
         value = self._values.get(key, SPEC[key][1])
         opts = choices(key)
-        return value if value in opts else (SPEC[key][1] if SPEC[key][1] in opts else opts[0])
+        # Exact type match: 0 == False and 1 == True in Python.
+        if any(value == o and type(value) is type(o) for o in opts):
+            return value
+        return SPEC[key][1] if SPEC[key][1] in opts else opts[0]
 
     def set(self, key, value):
         if value not in choices(key):

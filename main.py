@@ -214,6 +214,7 @@ class Application:
     def _apply_settings(self):
         """(Re)build fonts and the reader from the current settings, keeping
         the reading position if a book is open."""
+        self.display.speed_mode = self.settings.get("speed_mode")
         face, size = self.settings.get("font"), self.settings.get("font_size")
         self.font_size = size
         self.font = load_font(size, face)
@@ -258,7 +259,7 @@ class Application:
                 return
             key = settings_mod.ORDER[self.settings_cursor]
             self.settings.cycle(key)
-            if key in ("font", "font_size"):
+            if key in ("font", "font_size", "speed_mode"):
                 self._apply_settings()
 
     def _render_settings(self):
@@ -713,8 +714,11 @@ class Application:
         else:
             img = self._active_reader().render()
             limit = self.settings.get("book_full_refresh_every") - 1
+        # Entering a book (or switching PDF text/image) clears the ghosting;
+        # in speed mode that is the only full refresh.
+        entering_book = not partial and self.mode in (AppMode.READER, AppMode.PDF_IMAGE)
         self.display.show(img, dither=self.mode == AppMode.PDF_IMAGE,
-                          partial=partial, limit=limit)
+                          partial=partial, limit=limit, force_full=entering_book)
         self._last_screen = screen
 
     def _render_browser(self):

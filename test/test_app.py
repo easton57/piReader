@@ -365,3 +365,72 @@ def test_open_restarts_idle_clock(app, monkeypatch):
     act(app, "next", "long")
     assert app.mode == main.AppMode.READER
     assert time.monotonic() - app.last_activity < 5
+
+
+def test_speed_mode_only_full_refreshes_when_opening_a_book(app):
+    app.settings.set("speed_mode", True)
+    app._apply_settings()
+    assert app.display.speed_mode
+    seen = []
+
+    def step(*actions):
+        act(app, *actions)
+        seen.append(app.display.last_refresh)
+
+    step("next")                       # move in the list
+    step("prev")
+    step("next", "long")               # open the book
+    assert app.mode == main.AppMode.READER
+    opened = len(seen) - 1
+    for _ in range(12):
+        step("next")                   # page turns, past any refresh limit
+    step("long")                       # back to the list
+    for _ in range(25):
+        step("next")                   # past menu_full_refresh_every
+    app._show_message("A message")     # messages too
+    seen.append(app.display.last_refresh)
+    assert seen[opened] == "full"
+    assert [r for i, r in enumerate(seen) if i != opened] == ["partial"] * (len(seen) - 1)
+
+
+def test_speed_mode_still_full_after_display_sleep(app):
+    """The panel loses its base frame in deep sleep, so the first frame after
+    waking has to be full even in speed mode."""
+    app.settings.set("speed_mode", True)
+    app._apply_settings()
+    app.display._base_valid = False
+    act(app, "next")
+    assert app.display.last_refresh == "full"
+    act(app, "next")
+    assert app.display.last_refresh == "partial"
+
+
+def test_speed_mode_from_settings_screen(app):
+    act(app, "prev", "long")  # open Settings
+    while settings_key(app) != "speed_mode":
+        act(app, "next")
+    act(app, "long")
+    assert app.settings.get("speed_mode") is True and app.display.speed_mode
+    act(app, "long")
+    assert app.settings.get("speed_mode") is False and not app.display.speed_mode
+
+
+def settings_key(app):
+    import settings as sm
+    return sm.ORDER[app.settings_cursor] if app.settings_cursor < len(sm.ORDER) else None
+
+
+def test_speed_mode_off_by_default_and_webui_toggle(app):
+    assert app.settings.get("speed_mode") is False
+    import webui
+    webui.app.test_client().post("/settings", data={"speed_mode": "True"})
+    app._render()
+    assert app.display.speed_mode
+
+
+def test_footer_shows_percentage(app):
+    from reader import page_label
+    assert page_label(0, 1) == "1/1 100%"
+    assert page_label(0, 5) == "1/5 0%"
+    assert page_label(2, 5) == "3/5 50%"
+    assert page_label(4, 5) == "5/5 100%"

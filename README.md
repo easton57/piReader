@@ -42,7 +42,12 @@ GPIO button, set `BUTTON_GPIO` to its BCM number.
   Reader's WebDAV folder it shows real titles instead of Koodo's numbered filenames.
 - Syncs reading progress with Koodo Reader or KOReader through a KOReader sync server (EPUB only).
 - Settings on the device or in the web UI: font (Mono, Sans, Serif, or any .ttf/.otf you put in
-  `fonts/`), text size, how often pages and menus do a full refresh, and auto power off.
+  `fonts/`), text size, how often pages and menus do a full refresh, auto power off, and speed
+  mode.
+- Speed mode: the only full refresh is when you open a book. Page turns, menus and messages all
+  use the fast partial refresh. Expect more ghosting; reopening the book clears it. The first
+  frame after the screen sleeps is still full, because the panel forgets its last image.
+- The footer shows the page number and how far through the book you are (by page).
 - Web UI on port 5000 for uploading and deleting books, removing downloaded copies, setting the
   screensaver, configuring cloud and sync, and shutting down.
 - Screensaver after 5 minutes idle, powers off after 15 (configurable, skipped while charging).
@@ -139,23 +144,29 @@ last: the e-ink keeps showing the screensaver with no power, and the PiSugar but
 into the book you were reading.
 
 Boot time depends mostly on what else the OS starts. A stock Raspberry Pi OS image runs a lot
-that a reader doesn't need. Things worth turning off:
+that a reader doesn't need. `scripts/trim-pi.sh` turns it off: audio, Bluetooth, mDNS
+(`<hostname>.local`), cloud-init, apt's background timers, ModemManager, udisks2 and a few others,
+plus camera/display probing and the activity LED in `config.txt`. Wi-Fi, SSH, time sync and
+pisugar-server are left alone.
 
 ```bash
-sudo touch /etc/cloud/cloud-init.disabled
-sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
-sudo systemctl mask udisks2.service accounts-daemon.service rpi-resize-swap-file.service
+sudo scripts/trim-pi.sh --dry-run   # show what it would change
+sudo scripts/trim-pi.sh             # apply, then reboot
+sudo scripts/trim-pi.sh --revert    # undo
 ```
+
+`--keep-bluetooth` and `--keep-avahi` skip those parts. Units are masked, not just disabled,
+because several get started on demand otherwise. What it changed is recorded in
+`/var/lib/pireader-trim/`, and `config.txt` is backed up first.
 
 Use `systemd-analyze blame` and `systemd-analyze critical-chain ereader.service` to see what's
 still slow.
 
-Optional power savings in `/boot/firmware/config.txt`:
+Optional extra power savings in `/boot/firmware/config.txt` (not in the script: underclocking
+makes opening books slower):
 
 ```
-dtparam=act_led_trigger=none
 dtparam=act_led_activelow=on
-dtoverlay=disable-bt
 arm_freq=700
 ```
 
