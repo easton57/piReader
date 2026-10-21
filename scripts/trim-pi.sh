@@ -84,7 +84,6 @@ UNITS=(
     "packagekit.service|desktop package updates"
     "cups.service|printing"
     "cups-browsed.service|printer discovery"
-    "rpi-resize-swap-file.service|resizes swap on every boot"
     "NetworkManager-wait-online.service|delays boot until online; the reader syncs once Wi-Fi is up"
     "keyboard-setup.service|console keymap, no keyboard"
     "apt-daily.timer|background apt downloads (CPU, SD writes, battery)"
@@ -108,6 +107,20 @@ if [ "$KEEP_AVAHI" -eq 0 ]; then
 fi
 
 [ "$DRY" -eq 1 ] || mkdir -p "$STATE_DIR"
+
+# Swap must stay. An earlier version of this script masked
+# rpi-resize-swap-file, which leaves Pi OS with no swap: a big book then
+# exhausts RAM and the whole Pi locks up. Undo that if it was done.
+for unit in rpi-resize-swap-file.service dphys-swapfile.service; do
+    if [ "$(systemctl is-enabled "$unit" 2>/dev/null || true)" = "masked" ] \
+            && grep -qxF "$unit" "$STATE_UNITS" 2>/dev/null; then
+        echo "restoring $unit (swap)"
+        run systemctl unmask "$unit"
+        run systemctl enable "$unit" || true
+        [ "$DRY" -eq 1 ] || sed -i "/^${unit//./\\.}\$/d" "$STATE_UNITS"
+    fi
+done
+
 for entry in "${UNITS[@]}"; do
     unit=${entry%%|*}
     why=${entry#*|}
