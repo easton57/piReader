@@ -85,7 +85,7 @@ the PiSugar button to boot it.
    Don't bind scripts to the button in its web UI; the reader handles the button itself.
 3. Install the reader:
    ```bash
-   sudo apt install -y git python3-venv poppler-utils fonts-dejavu-core
+   sudo apt install -y git python3-venv poppler-utils fonts-dejavu-core libxml2 libxslt1.1
    git clone https://github.com/easton57/piReader.git ~/piReader
    cd ~/piReader
    python3 -m venv venv
