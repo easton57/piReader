@@ -83,6 +83,7 @@ AUTO_POWER_OFF_MINUTES = 15
 SHUTDOWN_COMMANDS = [
     ["systemctl", "poweroff"],              # works as root / with a polkit rule
     ["sudo", "-n", "systemctl", "poweroff"],
+    ["sudo", "-n", "/sbin/poweroff"],       # OpenRC / sysvinit (no systemctl)
 ]
 
 # WebDAV "Cloud" folder. Credentials are in this file (gitignored), set them

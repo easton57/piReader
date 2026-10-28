@@ -38,6 +38,11 @@ if [ "$DRY" -eq 0 ] && [ "$(id -u)" -ne 0 ] && [ -z "${PIREADER_TRIM_STATE:-}" ]
     exit 1
 fi
 
+if ! command -v systemctl >/dev/null; then
+    echo "No systemctl: this script is for systemd. On OpenRC see docs/openrc.md." >&2
+    exit 1
+fi
+
 run() {
     if [ "$DRY" -eq 1 ]; then echo "  would run: $*"; else "$@"; fi
 }

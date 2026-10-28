@@ -1,0 +1,35 @@
+#!/sbin/openrc-run
+# OpenRC equivalent of ereader.service.
+#   sudo cp init/openrc/pireader /etc/init.d/pireader
+#   sudo rc-update add pireader default
+# Override the user or path in /etc/conf.d/pireader, e.g. PIREADER_DIR=/home/me/piReader
+
+name="piReader"
+description="e-ink reader"
+
+: "${PIREADER_USER:=pi}"
+: "${PIREADER_DIR:=/home/${PIREADER_USER}/piReader}"
+: "${PIREADER_LOG:=/run/pireader.log}"   # RAM, like the default volatile journal
+
+command="${PIREADER_DIR}/venv/bin/python"
+command_args="${PIREADER_DIR}/main.py"
+command_user="${PIREADER_USER}"
+directory="${PIREADER_DIR}"
+supervisor=supervise-daemon
+respawn_delay=5
+respawn_max=0
+output_log="${PIREADER_LOG}"
+error_log="${PIREADER_LOG}"
+export PYTHONUNBUFFERED=1
+
+depend() {
+	need localmount
+	# Don't wait for the network: the reader works offline and syncs once
+	# Wi-Fi is up, same as After=network.target in the systemd unit.
+	use pisugar-server
+	after pisugar-server
+}
+
+start_pre() {
+	checkpath --file --owner "${PIREADER_USER}" --mode 0644 "${PIREADER_LOG}"
+}

@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+# pisugar-server only ships a systemd unit. This reads the same options file
+# its installer writes (/etc/default/pisugar-server, OPTS="--model ...").
+#   sudo cp init/openrc/pisugar-server /etc/init.d/pisugar-server
+#   sudo rc-update add pisugar-server default
+
+name="pisugar-server"
+description="PiSugar battery/RTC/button server"
+
+[ -r /etc/default/pisugar-server ] && . /etc/default/pisugar-server
+
+command=/usr/bin/pisugar-server
+# command_args is eval'd by OpenRC, so the quoted model name in OPTS survives.
+command_args="${OPTS}"
+supervisor=supervise-daemon
+respawn_delay=2
+
+depend() {
+	need localmount
+	after modules
+}

@@ -99,6 +99,7 @@ the PiSugar button to boot it.
    sudo systemctl daemon-reload
    sudo systemctl enable --now ereader
    ```
+   On OpenRC use `init/openrc/pireader` instead (see [docs/openrc.md](docs/openrc.md)).
 5. Let the service user power the Pi off. Without this, Shut down and auto power off only show
    "Couldn't power off".
    ```bash
@@ -170,6 +171,20 @@ check that `free -m` shows swap.
 
 Use `systemd-analyze blame` and `systemd-analyze critical-chain ereader.service` to see what's
 still slow.
+
+NetworkManager is heavy for one Wi-Fi interface. `scripts/nm-to-dhcpcd.sh` swaps it for dhcpcd +
+wpa_supplicant, copying your saved Wi-Fi networks over. It doesn't stop anything while running
+(SSH over Wi-Fi stays up); the switch happens on reboot.
+
+```bash
+sudo scripts/nm-to-dhcpcd.sh --dry-run   # list the networks it found, show the changes
+sudo scripts/nm-to-dhcpcd.sh             # apply, then reboot
+sudo scripts/nm-to-dhcpcd.sh --revert    # back to NetworkManager
+```
+
+Have a console or the SD card at hand the first time, in case the new config doesn't connect.
+
+Running without systemd (OpenRC) is experimental; see [docs/openrc.md](docs/openrc.md).
 
 Optional extra power savings in `/boot/firmware/config.txt` (not in the script: underclocking
 makes opening books slower):
