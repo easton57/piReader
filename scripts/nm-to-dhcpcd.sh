@@ -134,9 +134,18 @@ fi
 
 # --- install dhcpcd while the network still works ----------------------------
 
-if ! command -v dhcpcd >/dev/null; then
-    echo "installing dhcpcd"
+# Check for the unit, not the binary: Bookworm can have dhcpcd-base (binary
+# only) without the dhcpcd package that ships dhcpcd.service.
+unit_exists() {
+    [ -n "$(systemctl list-unit-files --no-legend "$1" 2>/dev/null)" ]
+}
+if ! unit_exists dhcpcd.service; then
+    echo "installing dhcpcd (service)"
     run apt-get install -y dhcpcd || run apt-get install -y dhcpcd5
+    if [ "$DRY" -eq 0 ] && ! unit_exists dhcpcd.service; then
+        echo "dhcpcd.service still missing after install. Not switching." >&2
+        exit 1
+    fi
 fi
 
 # --- write configs -----------------------------------------------------------
@@ -167,12 +176,14 @@ fi
 # --- switch services (takes effect on reboot) --------------------------------
 
 # Not --now: stopping NetworkManager here would drop an SSH session over Wi-Fi.
+# Enable the new stack first: if that fails, NetworkManager is untouched and
+# the Pi still has Wi-Fi after a reboot.
+run systemctl enable "wpa_supplicant@$IFACE.service"
+run systemctl enable dhcpcd.service
 run systemctl disable NetworkManager.service
 run systemctl mask NetworkManager.service
 # The D-Bus wpa_supplicant NM used; the per-interface unit replaces it.
 run systemctl disable wpa_supplicant.service 2>/dev/null || true
-run systemctl enable "wpa_supplicant@$IFACE.service"
-run systemctl enable dhcpcd.service
 
 if [ "$DRY" -eq 0 ]; then
     mkdir -p "$STATE_DIR"
