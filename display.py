@@ -1,7 +1,7 @@
 import logging
 import os
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from config import (
     DISPLAY_DRIVER,
@@ -107,31 +107,26 @@ def stamp_status(image, text, font):
 
 
 def fit_screensaver(image, size=None):
-    """Scale an image to fit the screen and fill the leftover bars with the
-    image's own background tone (dark art gets dark bars, not white)."""
+    """Scale an image to cover the whole screen and centre-crop the overflow,
+    so it fills edge to edge with no bars."""
     size = size or (WIDTH, HEIGHT)
     has_alpha = image.mode in ("RGBA", "LA") or "transparency" in image.info
     if has_alpha:
         rgba = image.convert("RGBA")
         alpha = rgba.getchannel("A")
         gray = rgba.convert("L")
-    else:
-        alpha, gray = None, image.convert("L")
-    if alpha is not None:
-        # Sample the edge of the visible content, not the transparent margin.
+        # Crop to the visible content so a transparent margin isn't what fills
+        # the screen, then give any remaining transparency the content's edge tone.
         bbox = alpha.point(lambda a: 255 if a > 127 else 0).getbbox() or (0, 0, *gray.size)
-        tone = border_tone(gray.crop(bbox), alpha.crop(bbox))
-    else:
-        tone = border_tone(gray)
-    if alpha is not None:  # transparent areas take the background tone too
+        gray, alpha = gray.crop(bbox), alpha.crop(bbox)
+        tone = border_tone(gray, alpha)
         gray = Image.composite(gray, Image.new("L", gray.size, tone), alpha)
-    gray.thumbnail(size, Image.LANCZOS)
-    # Snap near-black/near-white inside the image too; otherwise dithering
-    # sprinkles dots over a "black" background and a box shows against the bars.
-    gray = gray.point(lambda p: 0 if p < 48 else 255 if p > 208 else p)
-    canvas = Image.new("L", size, tone)
-    canvas.paste(gray, ((size[0] - gray.width) // 2, (size[1] - gray.height) // 2))
-    return canvas
+    else:
+        gray = image.convert("L")
+    gray = ImageOps.fit(gray, size, Image.LANCZOS, centering=(0.5, 0.5))
+    # Snap near-black/near-white; otherwise dithering sprinkles dots over
+    # what should be a solid black or white area.
+    return gray.point(lambda p: 0 if p < 48 else 255 if p > 208 else p)
 
 
 class EPaperDisplay:
