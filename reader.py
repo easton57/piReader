@@ -27,6 +27,8 @@ FOOTER_HEIGHT = 11
 LINE_SPACING = 2
 
 _battery_cache = {"value": None, "time": 0.0}
+_wifi_cache = {"value": False, "time": 0.0}
+WIFI_INTERFACE = "wlan0"
 
 
 def cached_battery(max_age=60):
@@ -37,6 +39,21 @@ def cached_battery(max_age=60):
         _battery_cache["time"] = now
     return _battery_cache["value"]
 
+def cached_wifi(max_age=60):
+    """Wi-Fi status, re-queried at most once a minute (render path must stay fast)."""
+    now = time.monotonic()
+    if _wifi_cache["time"] == 0.0 or now - _wifi_cache["time"] > max_age:
+        _wifi_cache["value"] = is_wifi_connected()
+        _wifi_cache["time"] = now
+    return _wifi_cache["value"]
+
+def is_wifi_connected(interface=WIFI_INTERFACE):
+    # Ask the kernel whether the interface is associated; no network I/O.
+    try:
+        with open(f"/sys/class/net/{interface}/operstate") as f:
+            return f.read().strip() == "up"
+    except OSError:
+        return False
 
 def page_label(current, total):
     """Footer text like "12/84 14%" (current is 0-based). Percentage is by
@@ -250,6 +267,19 @@ class TextReader:
     def get_total_pages(self):
         return len(self.pages)
 
+    def _draw_wifi_status(self, draw, x, y, connected):
+        """Draw a ~12x9 px Wi-Fi icon with its top-left at (x, y), sized to fit
+        the footer. Disconnected shows a crossed-out circle."""
+        if connected:
+            # Concentric arcs fanning up from a dot at (cx, cy).
+            cx, cy = x + 6, y + 7
+            for r in (7, 4):
+                draw.arc((cx - r, cy - r, cx + r, cy + r), 225, 315, fill=0)
+            draw.ellipse((cx - 1, cy - 1, cx + 1, cy + 1), fill=0)
+        else:
+            draw.ellipse((x + 1, y + 1, x + 9, y + 9), outline=0)
+            draw.line((x + 2, y + 8, x + 8, y + 2), fill=0)
+
     def render(self):
         image = Image.new("L", (self.WIDTH, self.HEIGHT), 255)
         draw = new_draw(image)
@@ -263,4 +293,12 @@ class TextReader:
         left = f"{battery}%" if battery is not None else ""
         right = page_label(self.current_page, len(self.pages))
         draw_footer(draw, self.footer_font, left, right)
+
+        # Wi-Fi icon sits in the footer just after the battery text.
+        wifi_x = MARGIN_LEFT
+        if left:
+            wifi_x += int(draw.textlength(left, font=self.footer_font)) + 4
+        connected = cached_wifi()
+        wifi_y = DISPLAY_HEIGHT - FOOTER_HEIGHT + (2 if connected else 1)
+        self._draw_wifi_status(draw, wifi_x, wifi_y, connected)
         return image
