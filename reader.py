@@ -298,7 +298,7 @@ class TextReader:
         wifi_x = MARGIN_LEFT
         if left:
             wifi_x += int(draw.textlength(left, font=self.footer_font)) + 4
-        self._draw_wifi_status(
-            draw, wifi_x, DISPLAY_HEIGHT - FOOTER_HEIGHT + 1, cached_wifi()
-        )
+        connected = cached_wifi()
+        wifi_y = DISPLAY_HEIGHT - FOOTER_HEIGHT + (2 if connected else 1)
+        self._draw_wifi_status(draw, wifi_x, wifi_y, connected)
         return image
